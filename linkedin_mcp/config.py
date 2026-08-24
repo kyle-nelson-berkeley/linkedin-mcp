@@ -62,9 +62,26 @@ def applied_dir() -> Path:
 
 
 def ensure_dir(path: Path) -> Path:
-    """Create ``path`` (and parents) owner-only, and tighten it if it exists."""
-    path.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)
-    os.chmod(path, DIR_MODE)
+    """Create ``path`` owner-only, tightening every level we own down to 0700.
+
+    ``Path.mkdir(parents=True)`` creates intermediate directories with the
+    default umask mode, so each level inside the config root is created and
+    chmod'ed explicitly instead.
+    """
+    root = config_dir()
+    levels: list[Path] = []
+    current = path
+    while True:
+        levels.append(current)
+        if current == root or current.parent == current:
+            break
+        current = current.parent
+
+    # Anything above the config root (e.g. ~/.config) is left alone.
+    levels[-1].parent.mkdir(parents=True, exist_ok=True)
+    for directory in reversed(levels):
+        directory.mkdir(mode=DIR_MODE, exist_ok=True)
+        os.chmod(directory, DIR_MODE)
     return path
 
 
