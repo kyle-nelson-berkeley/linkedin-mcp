@@ -466,6 +466,13 @@ def apply_proposal(
     request goes out, so it can be sent at most once. See the module docstring
     for what a claim left behind by a crash means and how to clear it.
     """
+    # Build the client BEFORE claiming: if construction fails (e.g. no access
+    # token stored), nothing was sent, and the proposal must stay pending and
+    # retryable rather than stuck claimed.
+    owns_client = client is None
+    if owns_client:
+        client = api.LinkedInClient(config.access_token(), transport=transport)
+
     claimed = _claim(proposal_id)
     record = _read(claimed)
     if record.get("status") != STATUS_PENDING:
@@ -477,9 +484,6 @@ def apply_proposal(
     record["claimed_at"] = int(time.time())
     _save(record, config.claimed_dir())
 
-    owns_client = client is None
-    if owns_client:
-        client = api.LinkedInClient(config.access_token(), transport=transport)
     try:
         response = client.send(prepared)
     except BaseException as exc:

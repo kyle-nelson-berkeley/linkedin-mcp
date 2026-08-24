@@ -113,12 +113,14 @@ def _listener_address(redirect_uri: str) -> tuple[str, int, str]:
             f"got scheme {parsed.scheme!r}"
         )
     host = parsed.hostname
-    if host not in ("localhost", "127.0.0.1", "::1"):
+    if host not in ("localhost", "127.0.0.1"):
         # The catcher is a plaintext local redirect target. Binding anywhere
         # beyond loopback would expose the OAuth callback (and the code it
-        # carries) to the network.
+        # carries) to the network. ::1 is rejected too: http.server's default
+        # address family is IPv4, so accepting ::1 would accept a config that
+        # always fails at bind time.
         raise OAuthError(
-            "redirect_uri host must be loopback (localhost, 127.0.0.1, or ::1) "
+            "redirect_uri host must be IPv4 loopback (localhost or 127.0.0.1) "
             f"for the local catcher, got {host!r}"
         )
     port = parsed.port or 80
@@ -161,17 +163,18 @@ def wait_for_callback(
                 self._respond(404, "<html><body>not the callback path</body></html>")
                 return
             params = dict(urllib.parse.parse_qsl(parsed.query))
+            # State FIRST: a callback with a wrong/missing state is untrusted
+            # whatever else it carries (api-notes.md: treat as CSRF, 401, abort).
+            if params.get("state") != expected_state:
+                outcome["error"] = "state mismatch on the OAuth callback (possible CSRF) — aborted before any token exchange"
+                self._respond(401, _FAILURE_PAGE)
+                return
             if params.get("error"):
                 outcome["error"] = (
                     f"LinkedIn returned error={params['error']}: "
                     f"{params.get('error_description', 'no description')}"
                 )
                 self._respond(400, _FAILURE_PAGE)
-                return
-            if params.get("state") != expected_state:
-                # api-notes.md: state mismatch => treat as CSRF, respond 401, abort.
-                outcome["error"] = "state mismatch on the OAuth callback (possible CSRF) — aborted before any token exchange"
-                self._respond(401, _FAILURE_PAGE)
                 return
             code = params.get("code")
             if not code:

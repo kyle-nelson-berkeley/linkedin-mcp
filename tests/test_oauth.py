@@ -406,3 +406,38 @@ def test_listener_accepts_loopback_redirect_hosts(redirect_uri):
     assert host in ("localhost", "127.0.0.1")
     assert port == 8765
     assert path == "/callback"
+
+
+# --- round 6 -------------------------------------------------------------------
+
+
+def test_error_callback_with_bad_state_is_treated_as_csrf_not_oauth_error(isolated_config):
+    """State is validated BEFORE the OAuth-error branch: a callback carrying
+    error= but a wrong state is an untrusted request and must 401 as CSRF."""
+    port = _free_port()
+    redirect_uri = _redirect_uri(port)
+    captured: dict = {}
+
+    def run():
+        try:
+            oauth.wait_for_callback(
+                redirect_uri=redirect_uri, expected_state="st-ok", timeout=10
+            )
+        except oauth.OAuthError as exc:
+            captured["error"] = str(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    oauth.wait_until_listening("127.0.0.1", port, timeout=5)
+    status, _ = _hit(f"{redirect_uri}?error=user_cancelled_authorize&state=WRONG")
+    thread.join(timeout=10)
+
+    assert status == 401
+    assert "state" in captured["error"].lower()
+
+
+def test_listener_rejects_ipv6_loopback_rather_than_binding_broken(isolated_config):
+    """The catcher's HTTPServer is IPv4-only; accepting ::1 would accept a
+    config that always fails at bind time. Reject it up front."""
+    with pytest.raises(oauth.OAuthError, match="loopback|127.0.0.1"):
+        oauth._listener_address("http://[::1]:8765/callback")

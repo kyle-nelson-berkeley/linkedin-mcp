@@ -579,3 +579,19 @@ def test_a_claimed_5xx_proposal_refuses_a_retry_and_sends_nothing(isolated_confi
     with pytest.raises(proposals.ProposalError):
         proposals.apply_proposal(proposal_id, client=client)
     assert len(calls) == sent_after_first  # retry sent nothing
+
+
+# --- round 6: no claim without a client ---------------------------------------
+
+
+def test_apply_without_a_token_leaves_the_proposal_pending(isolated_config):
+    """If client construction fails (no access token stored), nothing was sent,
+    so the proposal must stay pending and retryable — not stuck claimed."""
+    proposal_id = _headline_proposal()["proposal_id"]
+    with pytest.raises(Exception):
+        proposals.apply_proposal(proposal_id)  # no client, no token configured
+    assert _pending_path(proposal_id).exists()
+    assert not _claimed_path(proposal_id).exists()
+    # and it is still applicable later
+    listed = proposals.list_proposals()
+    assert any(p["proposal_id"] == proposal_id for p in listed)
