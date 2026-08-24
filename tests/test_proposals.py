@@ -60,31 +60,82 @@ def test_summary_proposal_uses_richtext_shape(isolated_config):
     assert "Current summary from the mock profile." in result["diff"]
 
 
+def _localized_string(value: str, locale: str = "en_US") -> dict:
+    language, country = locale.split("_")
+    return {
+        "localized": {locale: value},
+        "preferredLocale": {"country": country, "language": language},
+    }
+
+
 @pytest.mark.parametrize(
-    "section,sub",
-    [("position", "positions"), ("skill", "skills"), ("education", "educations")],
+    "section,sub,field",
+    [
+        ("position", "positions", "title"),
+        ("skill", "skills", "name"),
+        ("education", "educations", "schoolName"),
+    ],
 )
-def test_sub_resource_create_update_delete_urls(isolated_config, section, sub):
+def test_sub_resource_create_update_delete_urls(isolated_config, section, sub, field):
     created = proposals.propose_edit(
-        section, {"action": "create", "fields": {"title": "x"}}, person_id=PERSON_ID
+        section, {"action": "create", "fields": {field: "x"}}, person_id=PERSON_ID
     )
     assert created["request"]["url"] == f"https://api.linkedin.com/v2/people/id=ABC123/{sub}"
+    assert created["request"]["json_body"] == {field: _localized_string("x")}
 
     updated = proposals.propose_edit(
         section,
-        {"action": "update", "entity_id": "E9", "fields": {"title": "y"}},
+        {"action": "update", "entity_id": "E9", "fields": {field: "y"}},
         person_id=PERSON_ID,
     )
     assert updated["request"]["url"] == (
         f"https://api.linkedin.com/v2/people/id=ABC123/{sub}/E9"
     )
-    assert updated["request"]["json_body"] == {"patch": {"$set": {"title": "y"}}}
+    assert updated["request"]["json_body"] == {
+        "patch": {"$set": {field: _localized_string("y")}}
+    }
 
     deleted = proposals.propose_edit(
         section, {"action": "delete", "entity_id": "E9"}, person_id=PERSON_ID
     )
     assert deleted["request"]["method"] == "DELETE"
     assert deleted["request"]["json_body"] is None
+
+
+def test_skill_create_proposal_records_the_documented_multilocale_body(isolated_config):
+    """api-notes.md, Skills CREATE minimal body — a plain string is normalized."""
+    result = proposals.propose_edit(
+        "skill",
+        {"action": "create", "fields": {"name": "Project Management"}},
+        person_id=PERSON_ID,
+    )
+    assert result["request"]["json_body"] == {
+        "name": _localized_string("Project Management")
+    }
+    # The human-readable diff still shows the plain text, not the wire shape.
+    assert "Project Management" in result["diff"]
+
+
+def test_proposal_locale_flows_into_sub_resource_fields(isolated_config):
+    result = proposals.propose_edit(
+        "skill",
+        {"action": "create", "fields": {"name": "Robótica"}},
+        person_id=PERSON_ID,
+        locale="es_ES",
+    )
+    assert result["request"]["json_body"] == {
+        "name": _localized_string("Robótica", "es_ES")
+    }
+
+
+def test_invalid_locale_is_rejected_as_a_proposal_error(isolated_config):
+    with pytest.raises(proposals.ProposalError):
+        proposals.propose_edit(
+            "skill",
+            {"action": "create", "fields": {"name": "x"}},
+            person_id=PERSON_ID,
+            locale="english",
+        )
 
 
 def test_update_without_entity_id_is_rejected(isolated_config):

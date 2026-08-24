@@ -78,20 +78,103 @@ def test_locale_override_flows_into_body_and_preferred_locale():
     assert body["preferredLocale"] == {"country": "ES", "language": "es"}
 
 
-def test_sub_resource_create_request():
-    prepared = api.build_sub_resource_create(
-        PERSON,
-        "skills",
-        {
-            "name": {
-                "localized": {"en_US": "Project Management"},
-                "preferredLocale": {"country": "US", "language": "en"},
-            }
-        },
-    )
+def _localized_string(value: str) -> dict:
+    return {
+        "localized": {"en_US": value},
+        "preferredLocale": {"country": "US", "language": "en"},
+    }
+
+
+def _localized_rich_text(value: str) -> dict:
+    return {
+        "localized": {"en_US": {"rawText": value}},
+        "preferredLocale": {"country": "US", "language": "en"},
+    }
+
+
+def test_sub_resource_create_passes_an_already_shaped_multilocale_value_through():
+    body = {"name": _localized_string("Project Management")}
+    prepared = api.build_sub_resource_create(PERSON, "skills", body)
     assert prepared.method == "POST"
     assert prepared.url == "https://api.linkedin.com/v2/people/id=ABC123/skills"
-    assert prepared.json_body["name"]["localized"] == {"en_US": "Project Management"}
+    assert prepared.json_body == body
+
+
+def test_skill_create_normalizes_a_plain_string_name_to_the_documented_shape():
+    """api-notes.md, Skills CREATE minimal body — name is a MultiLocaleString."""
+    prepared = api.build_sub_resource_create(
+        PERSON, "skills", {"name": "Project Management"}
+    )
+    assert prepared.json_body == {"name": _localized_string("Project Management")}
+
+
+def test_skill_update_normalizes_a_plain_string_name_inside_patch_set():
+    prepared = api.build_sub_resource_update(
+        PERSON, "skills", "SK1", {"name": "Robotics"}
+    )
+    assert prepared.json_body == {
+        "patch": {"$set": {"name": _localized_string("Robotics")}}
+    }
+
+
+def test_position_text_fields_use_documented_multilocale_shapes():
+    prepared = api.build_sub_resource_create(
+        PERSON,
+        "positions",
+        {
+            "title": "Engineer",
+            "companyName": "WHOI",
+            "description": "Built an ocean sensor probe.",
+        },
+    )
+    assert prepared.json_body == {
+        "title": _localized_string("Engineer"),
+        "companyName": _localized_string("WHOI"),
+        "description": _localized_rich_text("Built an ocean sensor probe."),
+    }
+
+
+def test_education_text_fields_use_documented_multilocale_shapes():
+    prepared = api.build_sub_resource_update(
+        PERSON,
+        "educations",
+        "EDU3",
+        {"schoolName": "UC Berkeley", "degreeName": "BS"},
+    )
+    assert prepared.json_body == {
+        "patch": {
+            "$set": {
+                "schoolName": _localized_string("UC Berkeley"),
+                "degreeName": _localized_string("BS"),
+            }
+        }
+    }
+
+
+def test_non_localized_fields_are_forwarded_untouched():
+    prepared = api.build_sub_resource_create(
+        PERSON,
+        "positions",
+        {
+            "title": "Engineer",
+            "company": "urn:li:organization:1234",
+            "startMonthYear": {"month": 6, "year": 2025},
+        },
+    )
+    assert prepared.json_body["company"] == "urn:li:organization:1234"
+    assert prepared.json_body["startMonthYear"] == {"month": 6, "year": 2025}
+
+
+def test_sub_resource_locale_override_flows_into_the_normalized_field():
+    prepared = api.build_sub_resource_create(
+        PERSON, "skills", {"name": "Robótica"}, locale="es_ES"
+    )
+    assert prepared.json_body == {
+        "name": {
+            "localized": {"es_ES": "Robótica"},
+            "preferredLocale": {"country": "ES", "language": "es"},
+        }
+    }
 
 
 def test_sub_resource_update_wraps_body_in_patch_set():
@@ -100,7 +183,9 @@ def test_sub_resource_update_wraps_body_in_patch_set():
     )
     assert prepared.method == "POST"
     assert prepared.url == "https://api.linkedin.com/v2/people/id=ABC123/positions/POS7"
-    assert prepared.json_body == {"patch": {"$set": {"title": "Engineer"}}}
+    assert prepared.json_body == {
+        "patch": {"$set": {"title": _localized_string("Engineer")}}
+    }
 
 
 def test_sub_resource_delete_has_no_body():

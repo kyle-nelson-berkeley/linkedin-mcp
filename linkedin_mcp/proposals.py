@@ -158,12 +158,14 @@ def _sub_proposal(
         )
 
     if action == ACTION_CREATE:
-        prepared = api.build_sub_resource_create(person_id, sub, fields)
+        prepared = api.build_sub_resource_create(person_id, sub, fields, locale)
         return prepared, "", _pretty(dict(fields)), f"create {section}"
 
     if not entity_id:
         raise ProposalError(f"updating a {section} requires changes['entity_id']")
-    prepared = api.build_sub_resource_update(person_id, sub, str(entity_id), fields)
+    prepared = api.build_sub_resource_update(
+        person_id, sub, str(entity_id), fields, locale
+    )
     return prepared, "", _pretty(dict(fields)), f"update {section} {entity_id}"
 
 
@@ -189,6 +191,14 @@ def propose_edit(
     if not isinstance(changes, Mapping):
         raise ProposalError("changes must be a mapping")
 
+    # Validated before anything is built: the locale shapes every documented
+    # MultiLocale body, so a bad locale must fail as a ProposalError, not leak
+    # an ApiError out of a request builder.
+    try:
+        api.split_locale(locale)
+    except api.ApiError as exc:
+        raise ProposalError(str(exc)) from exc
+
     # A read (GET /v2/me) is the ONLY request this function may make, and only
     # when the caller gave it neither a profile snapshot nor a person id.
     if profile is None and client is not None and (person_id is None or section in BASIC_SECTIONS):
@@ -204,11 +214,6 @@ def propose_edit(
         prepared, current, proposed, label = _sub_proposal(
             section, changes, resolved_person_id, profile, locale
         )
-
-    try:
-        api.split_locale(locale)
-    except api.ApiError as exc:
-        raise ProposalError(str(exc)) from exc
 
     record = {
         "proposal_id": uuid.uuid4().hex,

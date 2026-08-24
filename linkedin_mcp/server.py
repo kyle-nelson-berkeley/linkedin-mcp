@@ -109,7 +109,10 @@ def get_profile() -> dict[str, Any]:
         "section: headline | summary | position | skill | education.\n"
         "changes: for headline/summary use {'text': '...'}; for position/skill/"
         "education use {'action': 'create'|'update'|'delete', 'entity_id': '<id>' (for "
-        "update/delete), 'fields': {...}}."
+        "update/delete), 'fields': {...}}.\n"
+        "Localized text fields (skill name, position title/companyName/description, "
+        "education schoolName/degreeName/...) may be given as plain strings — they are "
+        "wrapped in LinkedIn's documented MultiLocale shape for the chosen locale."
     )
 )
 def propose_edit(

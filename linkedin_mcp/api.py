@@ -26,6 +26,36 @@ DEFAULT_LOCALE = "en_US"
 SUB_RESOURCES = ("positions", "skills", "educations")
 BASIC_FIELDS = ("headline", "summary")
 
+# The two documented localized shapes (docs/api-notes.md, source 1).
+MULTI_LOCALE_STRING = "MultiLocaleString"
+MULTI_LOCALE_RICH_TEXT = "MultiLocaleRichText"
+
+# Which sub-resource fields are localized, and with which shape.
+#
+# api-notes.md records the shapes verbatim: headline is a MultiLocaleString,
+# summary a MultiLocaleRichText, and the Skills CREATE minimal body shows
+# ``name`` as a MultiLocaleString. The position/education entries below are the
+# SAME two documented shapes applied to those sub-resources' localized text
+# fields. Anything NOT listed here (urns, dates, ids, booleans) is forwarded
+# untouched, and a value that already carries a ``localized`` key is passed
+# through as the caller shaped it.
+LOCALIZED_SUB_FIELDS: dict[str, dict[str, str]] = {
+    "skills": {"name": MULTI_LOCALE_STRING},
+    "positions": {
+        "title": MULTI_LOCALE_STRING,
+        "companyName": MULTI_LOCALE_STRING,
+        "description": MULTI_LOCALE_RICH_TEXT,
+    },
+    "educations": {
+        "schoolName": MULTI_LOCALE_STRING,
+        "degreeName": MULTI_LOCALE_STRING,
+        "fieldOfStudy": MULTI_LOCALE_STRING,
+        "activities": MULTI_LOCALE_STRING,
+        "grade": MULTI_LOCALE_STRING,
+        "notes": MULTI_LOCALE_RICH_TEXT,
+    },
+}
+
 DEFAULT_TIMEOUT = 30.0
 
 
@@ -108,14 +138,47 @@ def _basic_patch(field_name: str, value: Any) -> dict[str, Any]:
     return {"patch": {"$set": {field_name: value}}}
 
 
+def multi_locale_string(value: str, locale: str = DEFAULT_LOCALE) -> dict[str, Any]:
+    """``"x"`` -> the documented MultiLocaleString envelope."""
+    return {"localized": {locale: value}, "preferredLocale": split_locale(locale)}
+
+
+def multi_locale_rich_text(value: str, locale: str = DEFAULT_LOCALE) -> dict[str, Any]:
+    """``"x"`` -> the documented MultiLocaleRichText envelope (``rawText``)."""
+    return {
+        "localized": {locale: {"rawText": value}},
+        "preferredLocale": split_locale(locale),
+    }
+
+
+def normalize_sub_resource_fields(
+    sub: str, fields: Mapping[str, Any], locale: str = DEFAULT_LOCALE
+) -> dict[str, Any]:
+    """Wrap plain-string values of documented localized fields.
+
+    A caller may hand in ``{"name": "Project Management"}``; LinkedIn documents
+    ``name`` as a MultiLocaleString, so the plain string is wrapped. Values that
+    are already shaped (any non-string, including a caller-built ``localized``
+    mapping) are forwarded exactly as given.
+    """
+    localized = LOCALIZED_SUB_FIELDS.get(sub, {})
+    normalized: dict[str, Any] = {}
+    for key, value in fields.items():
+        shape = localized.get(key)
+        if shape is None or not isinstance(value, str):
+            normalized[key] = value
+        elif shape == MULTI_LOCALE_RICH_TEXT:
+            normalized[key] = multi_locale_rich_text(value, locale)
+        else:
+            normalized[key] = multi_locale_string(value, locale)
+    return normalized
+
+
 def build_headline_request(
     person_id: str, headline: str, locale: str = DEFAULT_LOCALE
 ) -> PreparedRequest:
     """headline is a MultiLocaleString (api-notes.md, source 1)."""
-    body = _basic_patch(
-        "headline",
-        {"localized": {locale: headline}, "preferredLocale": split_locale(locale)},
-    )
+    body = _basic_patch("headline", multi_locale_string(headline, locale))
     return PreparedRequest("POST", basic_field_url(person_id), _base_headers(), body)
 
 
@@ -123,34 +186,34 @@ def build_summary_request(
     person_id: str, summary: str, locale: str = DEFAULT_LOCALE
 ) -> PreparedRequest:
     """summary is a MultiLocaleRichText (api-notes.md, source 1)."""
-    body = _basic_patch(
-        "summary",
-        {
-            "localized": {locale: {"rawText": summary}},
-            "preferredLocale": split_locale(locale),
-        },
-    )
+    body = _basic_patch("summary", multi_locale_rich_text(summary, locale))
     return PreparedRequest("POST", basic_field_url(person_id), _base_headers(), body)
 
 
 def build_sub_resource_create(
-    person_id: str, sub: str, body: Mapping[str, Any]
+    person_id: str, sub: str, body: Mapping[str, Any], locale: str = DEFAULT_LOCALE
 ) -> PreparedRequest:
+    url = sub_resource_url(person_id, sub)
     return PreparedRequest(
-        "POST", sub_resource_url(person_id, sub), _base_headers(), dict(body)
+        "POST", url, _base_headers(), normalize_sub_resource_fields(sub, body, locale)
     )
 
 
 def build_sub_resource_update(
-    person_id: str, sub: str, entity_id: str, changes: Mapping[str, Any]
+    person_id: str,
+    sub: str,
+    entity_id: str,
+    changes: Mapping[str, Any],
+    locale: str = DEFAULT_LOCALE,
 ) -> PreparedRequest:
     if not entity_id:
         raise ApiError(f"updating a {sub} entry requires its entity_id")
+    url = sub_resource_url(person_id, sub, entity_id)
     return PreparedRequest(
         "POST",
-        sub_resource_url(person_id, sub, entity_id),
+        url,
         _base_headers(),
-        {"patch": {"$set": dict(changes)}},
+        {"patch": {"$set": normalize_sub_resource_fields(sub, changes, locale)}},
     )
 
 
