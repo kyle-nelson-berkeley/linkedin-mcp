@@ -58,8 +58,9 @@ partner program.
 ## Development
 
 ```bash
-bash run.sh --help          # bootstraps the venv
-.venv/bin/python -m pytest  # offline — every test runs against a mock transport
+bash run.sh --help                                # bootstraps the venv (runtime deps only)
+.venv/bin/pip install -r requirements-dev.txt     # adds pytest + coverage tooling
+.venv/bin/python -m pytest                        # offline — every test runs against a mock transport
 ```
 
 The test suite includes a **granted-write fixture**: a mock LinkedIn where
