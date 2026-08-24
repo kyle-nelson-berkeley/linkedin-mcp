@@ -189,7 +189,9 @@ def propose_edit(
     if not isinstance(changes, Mapping):
         raise ProposalError("changes must be a mapping")
 
-    if profile is None and client is not None and section in BASIC_SECTIONS:
+    # A read (GET /v2/me) is the ONLY request this function may make, and only
+    # when the caller gave it neither a profile snapshot nor a person id.
+    if profile is None and client is not None and (person_id is None or section in BASIC_SECTIONS):
         profile = _safe_read_profile(client)
 
     resolved_person_id = _resolve_person_id(person_id, profile)
