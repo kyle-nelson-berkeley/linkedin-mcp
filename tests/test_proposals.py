@@ -243,6 +243,8 @@ def test_failed_apply_keeps_the_proposal_pending_and_records_the_error(isolated_
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         return httpx.Response(403, json={"message": "Not enough permissions", "status": 403})
 
     client = api.LinkedInClient(
@@ -262,6 +264,8 @@ def test_a_bare_401_apply_failure_is_not_reported_as_expected_pre_approval(isola
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         return httpx.Response(401, json={"message": "Unauthorized"})
 
     client = api.LinkedInClient(
@@ -303,6 +307,8 @@ def test_a_400_apply_failure_mentioning_permission_is_not_pre_approval(isolated_
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         return httpx.Response(400, json={"message": "no permission for field 'patch'"})
 
     client = api.LinkedInClient(
@@ -402,6 +408,8 @@ def test_a_crash_mid_send_leaves_the_proposal_claimed_not_pending(isolated_confi
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         raise httpx.ConnectError("connection reset mid-flight")
 
     client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
@@ -428,6 +436,8 @@ def test_a_definitive_http_failure_returns_the_proposal_to_pending(isolated_conf
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         return httpx.Response(403, json={"message": "Not enough permissions"})
 
     client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
@@ -504,7 +514,7 @@ def test_applying_an_unknown_id_is_refused_before_any_client_is_built(isolated_c
     mock = GrantedWriteLinkedIn()
     with pytest.raises(proposals.ProposalError) as excinfo:
         proposals.apply_proposal("deadbeef" * 4, client=_client(mock))
-    assert "no pending proposal" in str(excinfo.value)
+    assert "no proposal" in str(excinfo.value)
     assert mock.requests == []
 
 
@@ -549,6 +559,8 @@ def test_an_ambiguous_5xx_failure_keeps_the_proposal_claimed(isolated_config, st
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         return httpx.Response(status_code, json={"message": "server error"})
 
     client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
@@ -568,6 +580,8 @@ def test_a_claimed_5xx_proposal_refuses_a_retry_and_sends_nothing(isolated_confi
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         calls.append(request.method)
         return httpx.Response(503, json={"message": "server error"})
 
@@ -614,3 +628,42 @@ def test_failed_profile_read_is_not_shown_as_empty_current_value(isolated_config
     )
     assert "unavailable" in record["diff"].lower()
     assert record["current_value_unavailable"] is True
+
+
+# --- round 10: writes are bound to the authenticated member -------------------
+
+
+def test_apply_refuses_a_proposal_targeting_another_member(isolated_config):
+    """Own-profile-only contract: the write URL's person id must match the
+    authenticated /v2/me id at apply time, whatever id the proposal carries."""
+    mock = GrantedWriteLinkedIn()
+    client = _client(mock)
+    record = proposals.propose_edit(
+        "headline", {"text": "x"}, person_id="SOMEONE_ELSE", client=None
+    )
+    with pytest.raises(proposals.ProposalError, match="authenticated|member|match"):
+        proposals.apply_proposal(record["proposal_id"], client=client)
+    # nothing sent, proposal still pending and discardable
+    assert mock.non_get_requests == []
+    assert _pending_path(record["proposal_id"]).exists()
+
+
+def test_propose_rejects_a_mismatched_person_id_when_the_profile_is_readable(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    client = _client(mock)
+    with pytest.raises(proposals.ProposalError, match="authenticated|member|match"):
+        proposals.propose_edit(
+            "headline", {"text": "x"}, person_id="SOMEONE_ELSE", client=client
+        )
+    assert mock.non_get_requests == []
+
+
+def test_apply_still_works_when_the_proposal_targets_the_authenticated_member(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    client = _client(mock)
+    record = proposals.propose_edit("headline", {"text": "x"}, person_id=PERSON_ID, client=client)
+    outcome = proposals.apply_proposal(
+        record["proposal_id"], client=client
+    )
+    assert outcome["response"]["ok"] is True
+    assert len(mock.non_get_requests) == 1

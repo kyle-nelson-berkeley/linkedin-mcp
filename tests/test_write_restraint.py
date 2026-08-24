@@ -114,7 +114,8 @@ def test_positive_control_hits_the_exact_documented_headline_endpoint():
     )
     proposals.apply_proposal(proposal["proposal_id"], client=_client(mock))
 
-    assert mock.calls() == [("POST", "https://api.linkedin.com/v2/people/(id:ABC123)")]
+    writes = [(c, u) for (c, u) in mock.calls() if c != "GET"]
+    assert writes == [("POST", "https://api.linkedin.com/v2/people/(id:ABC123)")]
     assert mock.non_get_requests[0]["body"] == {
         "patch": {
             "$set": {
@@ -133,4 +134,4 @@ def test_apply_sends_exactly_one_request():
         "skill", {"action": "create", "fields": {"name": "Robotics"}}, person_id=PERSON_ID
     )
     proposals.apply_proposal(proposal["proposal_id"], client=_client(mock))
-    assert len(mock.requests) == 1
+    assert len(mock.non_get_requests) == 1

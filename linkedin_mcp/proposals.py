@@ -248,6 +248,16 @@ def propose_edit(
     # Basic-field updates replace the WHOLE value. If the profile read failed,
     # an empty "current" would be a materially misleading approval diff — say
     # plainly that the before-value is unknown instead.
+    if (
+        profile is not None
+        and person_id is not None
+        and str(profile.get("id", "")) != str(person_id)
+    ):
+        raise ProposalError(
+            f"person_id {person_id!r} does not match the authenticated member "
+            f"{profile.get('id')!r} — this server edits the owner's own profile only"
+        )
+
     current_unavailable = (
         section in BASIC_SECTIONS and profile is None and read_error is not None
     )
@@ -495,9 +505,39 @@ def apply_proposal(
     # Build the client BEFORE claiming: if construction fails (e.g. no access
     # token stored), nothing was sent, and the proposal must stay pending and
     # retryable rather than stuck claimed.
+    # Loaded FIRST so an unknown id is refused before any credential or
+    # client is touched.
+    preview = load_proposal(proposal_id)
+
     owns_client = client is None
     if owns_client:
         client = api.LinkedInClient(config.access_token(), transport=transport)
+
+    # Own-profile-only, enforced at the write boundary: the proposal's target
+    # must be the AUTHENTICATED member. Verified with a read before anything
+    # is claimed or sent; if the member cannot be verified, the write is
+    # refused rather than trusted.
+    try:
+        try:
+            me = client.get_profile()
+        except Exception as exc:
+            raise ProposalError(
+                "cannot verify the authenticated member before writing "
+                f"({type(exc).__name__}) — refusing to apply; re-run auth_start "
+                "and try again"
+            ) from exc
+        authenticated = str((me or {}).get("id", "")) if isinstance(me, dict) else ""
+        target = str(preview.get("person_id", ""))
+        if not authenticated or target != authenticated:
+            raise ProposalError(
+                f"proposal {proposal_id} targets person id {target!r} but the "
+                f"authenticated member is {authenticated!r} — this server edits "
+                "the owner's own profile only; discard the proposal"
+            )
+    except ProposalError:
+        if owns_client:
+            client.close()
+        raise
 
     claimed = _claim(proposal_id)
     record = _read(claimed)

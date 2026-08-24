@@ -122,6 +122,8 @@ def test_apply_reports_expected_pre_approval_error(isolated_config, monkeypatch)
     proposed = proposals.propose_edit("headline", {"text": "x"}, person_id=PERSON_ID)
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
         return httpx.Response(403, json={"message": "Not enough permissions"})
 
     monkeypatch.setattr(
