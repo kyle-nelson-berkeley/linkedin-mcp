@@ -10,6 +10,7 @@ containing SECRET / TOKEN / PASSWORD, recursively.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -20,6 +21,11 @@ DEFAULT_CONFIG_DIR = Path.home() / ".config" / "linkedin-mcp"
 ENV_FILENAME = ".env"
 PROPOSALS_DIRNAME = "proposals"
 APPLIED_DIRNAME = "applied"
+PENDING_AUTH_FILENAME = "pending_auth.json"
+
+# How long a handed-out OAuth CSRF state stays usable. Matches the documented
+# 30-minute authorization-code lifetime (docs/api-notes.md, source 5).
+PENDING_STATE_TTL = 1800
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -159,6 +165,54 @@ def write_values(values: Mapping[str, str]) -> Path:
     os.replace(tmp_path, path)
     os.chmod(path, FILE_MODE)
     return path
+
+
+# ------------------------------------------------- pending OAuth CSRF state
+
+
+def pending_auth_path() -> Path:
+    return config_dir() / PENDING_AUTH_FILENAME
+
+
+def save_pending_state(state: str) -> Path:
+    """Persist the CSRF state of an in-flight sign-in, owner-only (0600).
+
+    ``auth_start(url_only=True)`` hands a state to the human inside a URL; the
+    listener started later must expect that SAME state or the callback can
+    never pass the CSRF check.
+    """
+    ensure_dir(config_dir())
+    path = pending_auth_path()
+    payload = json.dumps({"state": str(state), "created_at": int(time.time())})
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(payload)
+    os.chmod(path, FILE_MODE)
+    return path
+
+
+def load_pending_state(max_age: float = PENDING_STATE_TTL) -> str | None:
+    """Return the pending CSRF state, or None if absent, stale, or unreadable."""
+    try:
+        record = json.loads(pending_auth_path().read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    if not isinstance(record, Mapping):
+        return None
+    state = record.get("state")
+    created_at = record.get("created_at")
+    if not isinstance(state, str) or not state:
+        return None
+    if not isinstance(created_at, (int, float)):
+        return None
+    if time.time() - created_at > max_age:
+        return None
+    return state
+
+
+def clear_pending_state() -> None:
+    """Forget the in-flight sign-in. Safe to call when nothing is pending."""
+    pending_auth_path().unlink(missing_ok=True)
 
 
 def _is_secret_key(key: Any) -> bool:

@@ -80,6 +80,31 @@ def build_authorization_url(
     return f"{AUTHORIZATION_URL}?{query}", state
 
 
+def start_authorization(
+    *,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    scope: str | None = None,
+) -> tuple[str, str]:
+    """Begin a sign-in: return ``(url, state)`` and REMEMBER the state.
+
+    The state is persisted (0600, in the config dir) and reused by the next
+    call while it is fresh, so the URL printed by ``auth_start(url_only=True)``
+    and the URL the listener expects carry the SAME state. Without that, the
+    callback from the already-open tab would be rejected as CSRF and the
+    advertised two-step flow could never complete.
+    """
+    pending = config.load_pending_state()
+    state = pending or secrets.token_urlsafe(STATE_BYTES)
+    # Built first: a missing client id must fail before anything is persisted.
+    url, _ = build_authorization_url(
+        client_id=client_id, redirect_uri=redirect_uri, scope=scope, state=state
+    )
+    if not pending:
+        config.save_pending_state(state)
+    return url, state
+
+
 def _listener_address(redirect_uri: str) -> tuple[str, int, str]:
     parsed = urllib.parse.urlparse(redirect_uri)
     if parsed.scheme != "http":
@@ -241,8 +266,13 @@ def run_authorization_flow(
     open_browser: bool = True,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Full flow: build URL, open it, catch one redirect, exchange, persist."""
-    url, state = build_authorization_url()
+    """Full flow: build URL, open it, catch one redirect, exchange, persist.
+
+    Reuses the state from a preceding ``auth_start(url_only=True)`` preview so
+    a tab the human already opened completes the flow, and clears it once the
+    sign-in has succeeded (the state is single-use).
+    """
+    url, state = start_authorization()
     redirect_uri = config.redirect_uri()
     if open_browser:
         _open_browser(url)
@@ -250,6 +280,7 @@ def run_authorization_flow(
         redirect_uri=redirect_uri, expected_state=state, timeout=timeout
     )
     status = exchange_code(code, transport=transport)
+    config.clear_pending_state()
     return {"authorization_url": url, "redirect_uri": redirect_uri, "token": status}
 
 

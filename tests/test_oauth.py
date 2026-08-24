@@ -14,7 +14,7 @@ import urllib.request
 import httpx
 import pytest
 
-from linkedin_mcp import config, oauth
+from linkedin_mcp import config, oauth, server
 
 
 def _free_port() -> int:
@@ -67,6 +67,66 @@ def test_authorization_state_is_random_per_call(isolated_config):
 def test_authorization_url_requires_a_client_id(isolated_config):
     with pytest.raises(config.ConfigError):
         oauth.build_authorization_url()
+
+
+# ---- pending state (url_only must not orphan its CSRF state) -------------
+
+
+def test_start_authorization_persists_its_state_0600(isolated_config):
+    config.write_values({"LINKEDIN_CLIENT_ID": "cid-1"})
+    _, state = oauth.start_authorization()
+
+    import os, stat
+
+    path = config.pending_auth_path()
+    assert path.exists()
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert config.load_pending_state() == state
+
+
+def test_start_authorization_reuses_the_pending_state(isolated_config):
+    config.write_values({"LINKEDIN_CLIENT_ID": "cid-1"})
+    first_url, first_state = oauth.start_authorization()
+    second_url, second_state = oauth.start_authorization()
+
+    assert second_state == first_state
+    assert second_url == first_url
+
+
+def test_a_stale_pending_state_is_not_reused(isolated_config):
+    config.write_values({"LINKEDIN_CLIENT_ID": "cid-1"})
+    _, first_state = oauth.start_authorization()
+
+    import json
+    import time
+
+    path = config.pending_auth_path()
+    path.write_text(
+        json.dumps(
+            {
+                "state": first_state,
+                "created_at": int(time.time()) - config.PENDING_STATE_TTL - 1,
+            }
+        )
+    )
+    assert config.load_pending_state() is None
+
+    _, second_state = oauth.start_authorization()
+    assert second_state != first_state
+
+
+def test_clearing_the_pending_state_is_idempotent(isolated_config):
+    config.clear_pending_state()
+    assert config.load_pending_state() is None
+    config.save_pending_state("st-1")
+    config.clear_pending_state()
+    assert config.load_pending_state() is None
+
+
+def test_a_corrupt_pending_state_file_reads_as_absent(isolated_config):
+    config.ensure_dir(config.config_dir())
+    config.pending_auth_path().write_text("{not json")
+    assert config.load_pending_state() is None
 
 
 # ---- one-shot callback listener -----------------------------------------
@@ -223,6 +283,88 @@ def test_token_exchange_failure_raises_without_persisting(isolated_config):
 
     assert "invalid_request" in str(excinfo.value)
     assert config.access_token() is None
+
+
+def test_url_only_preview_state_still_completes_the_flow(isolated_config):
+    """The advertised two-step flow must actually finish.
+
+    auth_start(url_only=True) hands the human a URL carrying a CSRF state. The
+    later listener run must expect THAT state, otherwise the callback from the
+    already-open tab is rejected as CSRF and the flow can never complete.
+    """
+    port = _free_port()
+    redirect_uri = _redirect_uri(port)
+    config.write_values(
+        {
+            "LINKEDIN_CLIENT_ID": "cid-1",
+            "LINKEDIN_CLIENT_SECRET": "sec-1",
+            config.KEY_REDIRECT_URI: redirect_uri,
+        }
+    )
+
+    preview = server.auth_start(url_only=True)
+    assert preview["ok"] is True
+    preview_state = dict(
+        urllib.parse.parse_qsl(urllib.parse.urlparse(preview["authorization_url"]).query)
+    )["state"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"access_token": "AQVfake", "expires_in": 5184000}
+        )
+
+    captured: dict = {}
+
+    def run():
+        try:
+            captured["result"] = oauth.run_authorization_flow(
+                timeout=10, open_browser=False, transport=httpx.MockTransport(handler)
+            )
+        except oauth.OAuthError as exc:  # pragma: no cover - failure diagnostics
+            captured["error"] = str(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    oauth.wait_until_listening("127.0.0.1", port, timeout=5)
+    # The human clicks the tab opened from the PREVIEW url, so LinkedIn echoes
+    # the preview's state back.
+    status, _ = _hit(f"{redirect_uri}?code=the-code&state={preview_state}")
+    thread.join(timeout=10)
+
+    assert "error" not in captured, captured.get("error")
+    assert status == 200
+    assert captured["result"]["token"]["has_token"] is True
+    assert config.access_token() == "AQVfake"
+    # The one-shot state is consumed, so the next sign-in starts fresh.
+    assert config.load_pending_state() is None
+
+
+def test_a_stale_preview_state_is_still_rejected_as_csrf(isolated_config):
+    """Reusing the pending state must not weaken the CSRF check."""
+    port = _free_port()
+    redirect_uri = _redirect_uri(port)
+    config.write_values(
+        {"LINKEDIN_CLIENT_ID": "cid-1", config.KEY_REDIRECT_URI: redirect_uri}
+    )
+    _, state = oauth.start_authorization()
+    captured: dict = {}
+
+    def run():
+        try:
+            oauth.wait_for_callback(
+                redirect_uri=redirect_uri, expected_state=state, timeout=10
+            )
+        except oauth.OAuthError as exc:
+            captured["error"] = str(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    oauth.wait_until_listening("127.0.0.1", port, timeout=5)
+    status, _ = _hit(f"{redirect_uri}?code=the-code&state=SOMEONE-ELSES")
+    thread.join(timeout=10)
+
+    assert status == 401
+    assert "state" in captured["error"].lower()
 
 
 def test_token_exchange_rejects_response_without_access_token(isolated_config):

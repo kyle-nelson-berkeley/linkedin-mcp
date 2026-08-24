@@ -54,14 +54,15 @@ def _error(exc: Exception) -> dict[str, Any]:
 def auth_start(url_only: bool = False, timeout_seconds: float = 300.0) -> dict[str, Any]:
     try:
         if url_only:
-            url, state = oauth.build_authorization_url()
+            url, state = oauth.start_authorization()
             return {
                 "ok": True,
                 "authorization_url": url,
                 "state": state,
                 "note": (
                     "Open this URL, approve, then run auth_start again (without "
-                    "url_only) to catch the redirect."
+                    "url_only) to catch the redirect. The second call reuses this "
+                    "same state, so the tab you already opened completes the flow."
                 ),
             }
         result = oauth.run_authorization_flow(timeout=timeout_seconds)
