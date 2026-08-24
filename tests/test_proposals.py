@@ -595,3 +595,22 @@ def test_apply_without_a_token_leaves_the_proposal_pending(isolated_config):
     # and it is still applicable later
     listed = proposals.list_proposals()
     assert any(p["proposal_id"] == proposal_id for p in listed)
+
+
+# --- round 7: a failed profile read must not masquerade as an empty value -----
+
+
+def test_failed_profile_read_is_not_shown_as_empty_current_value(isolated_config):
+    """Basic-field updates replace the WHOLE value; a diff claiming the current
+    headline is empty (because the read 401'd) is materially misleading."""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Expired access token"})
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    record = proposals.propose_edit(
+        "headline", {"text": "New headline"}, person_id=PERSON_ID, client=client
+    )
+    assert "unavailable" in record["diff"].lower()
+    assert record["current_value_unavailable"] is True

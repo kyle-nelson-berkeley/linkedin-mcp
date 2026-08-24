@@ -285,11 +285,33 @@ def run_authorization_flow(
     """
     url, state = start_authorization()
     redirect_uri = config.redirect_uri()
+    host, port, _path = _listener_address(redirect_uri)
+
+    # The listener must be UP before the browser opens: a member with an
+    # active session and prior grants is redirected immediately, and a
+    # redirect that bounces off a closed port strands the flow until timeout.
+    outcome: dict[str, Any] = {}
+
+    def _listen() -> None:
+        try:
+            outcome["code"] = wait_for_callback(
+                redirect_uri=redirect_uri, expected_state=state, timeout=timeout
+            )
+        except BaseException as exc:  # surfaced on the caller's thread below
+            outcome["error"] = exc
+
+    listener = threading.Thread(target=_listen, daemon=True)
+    listener.start()
+    wait_until_listening(host, port, timeout=5.0)
+
     if open_browser:
         _open_browser(url)
-    code = wait_for_callback(
-        redirect_uri=redirect_uri, expected_state=state, timeout=timeout
-    )
+    listener.join(timeout=timeout + 10.0)
+    if "error" in outcome:
+        raise outcome["error"]
+    if "code" not in outcome:
+        raise OAuthError("the callback listener ended without a code or an error")
+    code = outcome["code"]
     status = exchange_code(code, transport=transport)
     config.clear_pending_state()
     return {"authorization_url": url, "redirect_uri": redirect_uri, "token": status}

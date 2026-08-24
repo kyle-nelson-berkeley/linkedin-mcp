@@ -230,8 +230,9 @@ def propose_edit(
 
     # A read (GET /v2/me) is the ONLY request this function may make, and only
     # when the caller gave it neither a profile snapshot nor a person id.
+    read_error: str | None = None
     if profile is None and client is not None and (person_id is None or section in BASIC_SECTIONS):
-        profile = _safe_read_profile(client)
+        profile, read_error = _safe_read_profile(client)
 
     resolved_person_id = _resolve_person_id(person_id, profile)
 
@@ -244,6 +245,17 @@ def propose_edit(
             section, changes, resolved_person_id, profile, locale
         )
 
+    # Basic-field updates replace the WHOLE value. If the profile read failed,
+    # an empty "current" would be a materially misleading approval diff — say
+    # plainly that the before-value is unknown instead.
+    current_unavailable = (
+        section in BASIC_SECTIONS and profile is None and read_error is not None
+    )
+    if current_unavailable:
+        current = (
+            f"«current {section} unavailable — profile read failed: {read_error}»"
+        )
+
     record = {
         "proposal_id": uuid.uuid4().hex,
         "created_at": int(time.time()),
@@ -254,6 +266,7 @@ def propose_edit(
         "status": STATUS_PENDING,
         "current_value": current,
         "proposed_value": proposed,
+        "current_value_unavailable": current_unavailable,
         "diff": build_diff(current, proposed, label),
         "request": prepared.to_dict(),
     }
@@ -261,13 +274,26 @@ def propose_edit(
     return record
 
 
-def _safe_read_profile(client: "api.LinkedInClient") -> dict[str, Any] | None:
-    """Read-only best effort: a failed read must never block a proposal."""
+def _safe_read_profile(
+    client: "api.LinkedInClient",
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read-only best effort: a failed read must never block a proposal.
+
+    Returns (profile, error_summary). The error summary is token-free and is
+    surfaced in the approval diff so a failed read is never mistaken for an
+    empty current value.
+    """
+    import httpx
+
     try:
         profile = client.get_profile()
-    except Exception:
-        return None
-    return profile if isinstance(profile, dict) else None
+    except httpx.HTTPStatusError as exc:
+        return None, api.http_error_summary(exc)
+    except Exception as exc:
+        return None, (str(exc) or type(exc).__name__)
+    if isinstance(profile, dict):
+        return profile, None
+    return None, "profile response was not an object"
 
 
 # ----------------------------------------------------------------- storage

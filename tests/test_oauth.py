@@ -441,3 +441,38 @@ def test_listener_rejects_ipv6_loopback_rather_than_binding_broken(isolated_conf
     config that always fails at bind time. Reject it up front."""
     with pytest.raises(oauth.OAuthError, match="loopback|127.0.0.1"):
         oauth._listener_address("http://[::1]:8765/callback")
+
+
+# --- round 7 -------------------------------------------------------------------
+
+
+def test_listener_is_up_before_the_browser_opens(isolated_config, monkeypatch):
+    """A logged-in member with prior grants gets redirected IMMEDIATELY after
+    the browser opens. The callback port must already be listening at that
+    moment, or the flow dies waiting for a redirect that already bounced."""
+    port = _free_port()
+    redirect_uri = _redirect_uri(port)
+    config.write_values(
+        {
+            "LINKEDIN_CLIENT_ID": "cid-1",
+            "LINKEDIN_CLIENT_SECRET": "sec-1",
+            config.KEY_REDIRECT_URI: redirect_uri,
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": "AQVfast", "expires_in": 5184000})
+
+    def instant_redirect_browser(url: str) -> None:
+        # The "browser": LinkedIn redirects instantly. The port MUST accept
+        # right now — no retries, no grace period.
+        state = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))["state"]
+        status, _ = _hit(f"{redirect_uri}?code=fast-code&state={state}")
+        assert status == 200
+
+    monkeypatch.setattr(oauth, "_open_browser", instant_redirect_browser)
+    result = oauth.run_authorization_flow(
+        timeout=10, open_browser=True, transport=httpx.MockTransport(handler)
+    )
+    assert result["token"]["has_token"] is True
+    assert config.access_token() == "AQVfast"
