@@ -491,7 +491,13 @@ def _resolve_claim(record: dict[str, Any], claimed: Path, state: str) -> None:
     """
     record["status"] = state
     _save(record, config.ensure_dir(_dir_for(state)))
-    claimed.unlink()
+    try:
+        claimed.unlink()
+    except FileNotFoundError:
+        # A concurrent discard_proposal deleted the claim while the write was
+        # in flight. The outcome (this record, just saved) still stands — a
+        # missing claim file must not turn a completed write into an error.
+        pass
 
 
 def apply_proposal(

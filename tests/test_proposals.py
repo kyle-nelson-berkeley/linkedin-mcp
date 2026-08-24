@@ -696,3 +696,27 @@ def test_a_present_empty_headline_string_is_still_a_real_value(isolated_config):
     record = proposals.propose_edit("headline", {"text": "New"}, client=client)
     assert record["current_value_unavailable"] is False
     assert "Old one" in record["diff"]
+
+
+# --- round 12: a discard racing an active apply must not error the applier ----
+
+
+def test_a_discard_mid_apply_does_not_turn_a_successful_write_into_an_error(isolated_config):
+    """If discard_proposal deletes the claim between the send and the claim
+    resolution, the applier's write still succeeded — resolution must record
+    the applied state and report success, not FileNotFoundError."""
+    import httpx
+
+    proposal_id = _headline_proposal()["proposal_id"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json={"id": PERSON_ID})
+        # simulate the race: the human discards while the write is in flight
+        proposals.discard_proposal(proposal_id)
+        return httpx.Response(200, json={})
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    outcome = proposals.apply_proposal(proposal_id, client=client)
+    assert outcome["response"]["ok"] is True
+    assert outcome["status"] == proposals.STATUS_APPLIED

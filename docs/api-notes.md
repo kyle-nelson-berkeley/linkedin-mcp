@@ -107,11 +107,65 @@ Skills CREATE minimal body (verbatim):
   "preferredLocale": { "country": "US", "language": "en" } } }
 ```
 
+Positions CREATE sample body (verbatim, source 2 — note every human-text
+field is a MultiLocale envelope):
+
+```json
+{
+  "company": "urn:li:organization:0000",
+  "companyName": {
+    "localized": { "en_US": "LinkedIn" },
+    "preferredLocale": { "country": "US", "language": "en" }
+  },
+  "description": {
+    "localized": { "en_US": { "rawText": "Awesome developer manager!" } },
+    "preferredLocale": { "country": "US", "language": "en" }
+  },
+  "startMonthYear": { "month": 1, "year": 2014 },
+  "title": {
+    "localized": { "en_US": "Engineering Manager" },
+    "preferredLocale": { "country": "US", "language": "en" }
+  }
+}
+```
+
+(The full sample on the page also carries `location`, `geoPositionLocation.displayLocationName`,
+and `locationName`; the latter two are MultiLocaleString envelopes in the same
+shape as `title`. The PARTIAL_UPDATE sample uses `patch.$set` with these same
+envelope shapes plus a plain `endMonthYear` object.)
+
 Educations (verbatim endpoints):
 
 > `POST https://api.linkedin.com/v2/people/id={person ID}/educations`
 > `POST https://api.linkedin.com/v2/people/id={person ID}/educations/{education ID}`
 > `DELETE https://api.linkedin.com/v2/people/id={person ID}/educations/{education ID}`
+
+Educations CREATE sample body (verbatim excerpt, source 4 — same envelope
+pattern):
+
+```json
+{
+  "degreeName": {
+    "localized": { "en_US": "Bachelor of Science (B.S.)" },
+    "preferredLocale": { "country": "US", "language": "en" }
+  },
+  "notes": {
+    "localized": { "en_US": { "rawText": "Graduated with Honors." } },
+    "preferredLocale": { "country": "US", "language": "en" }
+  },
+  "organization": "urn:li:organization:12345",
+  "schoolName": {
+    "localized": { "en_US": "Santa Clara University" },
+    "preferredLocale": { "country": "US", "language": "en" }
+  },
+  "startMonthYear": { "year": 2011 }
+}
+```
+
+(The full sample also carries `activities` and `grade.grade` as
+MultiLocaleString envelopes and `fieldsOfStudy[].fieldOfStudyName` in the
+same shape; the PARTIAL_UPDATE sample uses `patch.$set` with `degreeName`,
+`schoolName` in these envelopes.)
 
 NOTE the URL-shape asymmetry, preserved exactly as documented: the basic-field
 edit uses `people/(id:{person ID})` (parenthesized Rest.li key) while the
