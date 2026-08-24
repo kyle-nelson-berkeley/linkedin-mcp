@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from . import api, config
+from . import api, config, probe
 
 STATUS_PENDING = "pending"
 STATUS_APPLIED = "applied"
@@ -36,21 +36,6 @@ SECTIONS = tuple(BASIC_SECTIONS) + tuple(SUB_SECTIONS)
 
 DEFAULT_LOCALE = api.DEFAULT_LOCALE
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
-
-# Signals that a write failed because partner approval has not landed yet —
-# expected, not a defect (docs/api-notes.md, "Partner gating").
-# A bare 401/403 with none of these is a bad or expired token, NOT pre-approval.
-_PRE_APPROVAL_MARKERS = (
-    "invalid scope",
-    "invalid_scope",
-    "access_denied",
-    "permission",
-    "not permitted",
-    "not_authorized",
-    "not authorized",
-    "unpermitted",
-)
-
 
 class ProposalError(RuntimeError):
     """Raised for bad proposal input or a missing/duplicate proposal."""
@@ -325,13 +310,15 @@ def discard_proposal(proposal_id: str) -> dict[str, Any]:
 def looks_like_pre_approval(status_code: int, body: Any) -> bool:
     """True when a failure is the EXPECTED 'partner approval not granted yet'.
 
-    An explicit scope/permission marker in the body is required. ``status_code`` is
-    kept for the caller's signature and for symmetry with ``probe.discriminate``; a
-    bare 401/403 means a bad or expired token, which is a real failure, not this.
+    Both halves are required: a 401/403 (LinkedIn refused on authorization
+    grounds) AND an explicit scope/permission marker (it refused over a scope,
+    not over a bad token). A bare 401/403 is an expired token; a 400 mentioning
+    "permission" is drifted spec.
+
+    This delegates to ``probe.discriminate`` so the apply path and the live probe
+    can never drift apart on what counts as the partner gate.
     """
-    del status_code  # deliberately not a signal — see the docstring
-    text = body.lower() if isinstance(body, str) else json.dumps(body).lower()
-    return any(marker in text for marker in _PRE_APPROVAL_MARKERS)
+    return probe.discriminate(status_code, body)["outcome"] == probe.EXPECTED_PRE_APPROVAL
 
 
 def apply_proposal(

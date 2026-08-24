@@ -282,5 +282,39 @@ def test_looks_like_pre_approval_needs_a_marker_not_just_a_401_403():
     assert proposals.looks_like_pre_approval(401, {"message": "invalid scope"}) is True
 
 
+@pytest.mark.parametrize("status_code", [400, 404, 405, 422, 500, 503])
+def test_looks_like_pre_approval_needs_a_401_403_not_just_a_marker(status_code):
+    assert proposals.looks_like_pre_approval(status_code, {"message": "invalid scope"}) is False
+    assert proposals.looks_like_pre_approval(status_code, "permission denied") is False
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 422, 500])
+@pytest.mark.parametrize(
+    "body", ["", {"message": "invalid scope"}, {"message": "Unauthorized"}, "permission"]
+)
+def test_looks_like_pre_approval_agrees_with_the_probe_discriminator(status_code, body):
+    from linkedin_mcp import probe
+
+    expected = probe.discriminate(status_code, body)["outcome"] == probe.EXPECTED_PRE_APPROVAL
+    assert proposals.looks_like_pre_approval(status_code, body) is expected
+
+
+def test_a_400_apply_failure_mentioning_permission_is_not_pre_approval(isolated_config):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"message": "no permission for field 'patch'"})
+
+    client = api.LinkedInClient(
+        access_token="tok", transport=httpx.MockTransport(handler)
+    )
+    result = _headline_proposal()
+    outcome = proposals.apply_proposal(result["proposal_id"], client=client)
+
+    assert outcome["response"]["status_code"] == 400
+    assert outcome["expected_pre_approval"] is False
+    assert outcome["status"] == proposals.STATUS_PENDING
+
+
 def _client(mock: GrantedWriteLinkedIn) -> api.LinkedInClient:
     return api.LinkedInClient(access_token="test-token", transport=mock.transport)

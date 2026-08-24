@@ -11,12 +11,14 @@ the answer through ``discriminate`` — a pure function, unit-tested with mocks.
 Outcomes (docs/api-notes.md, "Partner gating"):
 
 * EXPECTED_PRE_APPROVAL — endpoint shape verified, setup correct, LinkedIn is
-  refusing because partner approval has not landed. This needs an explicit
-  scope/permission marker in the body. Wait; do not work around it.
+  refusing because partner approval has not landed. This needs BOTH a 401/403
+  status AND an explicit scope/permission marker in the body. Wait; do not work
+  around it.
 * AUTH_ERROR           — a bare 401/403 with NO scope/permission marker: the
   token is invalid or expired. A failure, distinct from SPEC_ERROR.
-* SPEC_ERROR           — the endpoint spec has drifted. Report it as a failure
-  and re-verify docs/api-notes.md against the live docs. Do not work around it.
+* SPEC_ERROR           — 400/404/405/422: the endpoint spec has drifted,
+  whatever the body says. Report it as a failure and re-verify docs/api-notes.md
+  against the live docs. Do not work around it.
 * WRITE_OK             — partner access is live and the write path works.
 * UNKNOWN              — anything else; reported as a failure, never as a pass.
 
@@ -108,14 +110,20 @@ def discriminate(status_code: int, body: Any) -> dict[str, Any]:
 
     if 200 <= status_code < 300:
         outcome = WRITE_OK
-    elif any(marker in text for marker in _PRE_APPROVAL_MARKERS):
-        # Only an explicit scope/permission marker proves "setup correct, waiting
-        # on partner approval". A bare 401/403 proves nothing of the sort.
-        outcome = EXPECTED_PRE_APPROVAL
-    elif status_code in _AUTH_STATUSES:
-        outcome = AUTH_ERROR
     elif status_code in _SPEC_ERROR_STATUSES:
+        # The status is decided first, and a rejected-request status wins over
+        # anything the body happens to say: a 400 complaining that some field is
+        # "not permitted" is drifted spec, not the partner gate.
         outcome = SPEC_ERROR
+    elif status_code in _AUTH_STATUSES:
+        # Both halves are required. The 401/403 says LinkedIn refused on
+        # authorization grounds; the marker says it refused over a SCOPE rather
+        # than over a bad token. Either half alone proves nothing.
+        outcome = (
+            EXPECTED_PRE_APPROVAL
+            if any(marker in text for marker in _PRE_APPROVAL_MARKERS)
+            else AUTH_ERROR
+        )
     else:
         outcome = UNKNOWN
 

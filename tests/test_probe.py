@@ -54,10 +54,32 @@ def test_scope_and_access_messages_are_expected_pre_approval(body, status_code):
     assert result["is_failure"] is False
 
 
-def test_a_marker_counts_even_without_a_401_403_status():
+def test_a_marker_without_a_401_403_status_is_not_pre_approval():
+    """A marker alone proves nothing: only LinkedIn's own auth statuses do.
+
+    A 5xx that happens to contain the word "permission" is a server fault, not
+    the partner gate, and must never be reported as a pass.
+    """
     result = probe.discriminate(500, {"message": "invalid scope"})
-    assert result["outcome"] == probe.EXPECTED_PRE_APPROVAL
-    assert result["is_failure"] is False
+    assert result["outcome"] != probe.EXPECTED_PRE_APPROVAL
+    assert result["outcome"] == probe.UNKNOWN
+    assert result["is_failure"] is True
+
+
+@pytest.mark.parametrize("status_code", [400, 404, 405, 422])
+def test_a_spec_error_status_stays_a_spec_error_whatever_the_body_says(status_code):
+    result = probe.discriminate(
+        status_code, {"message": "you do not have permission for field 'patch'"}
+    )
+    assert result["outcome"] == probe.SPEC_ERROR
+    assert result["is_failure"] is True
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 503])
+def test_a_5xx_with_a_marker_is_unknown(status_code):
+    result = probe.discriminate(status_code, "ACCESS_DENIED by the edge proxy")
+    assert result["outcome"] == probe.UNKNOWN
+    assert result["is_failure"] is True
 
 
 def test_404_is_a_spec_error():
