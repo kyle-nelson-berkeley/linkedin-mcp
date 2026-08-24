@@ -22,7 +22,7 @@ proposal you have seen.
 | `propose_edit` | Builds the exact API request for a change (headline, summary, positions, skills, educations), saves it as a proposal, returns a unified diff + `proposal_id` | **never** |
 | `list_proposals` | Lists saved proposals | no |
 | `discard_proposal` | Deletes a saved proposal | no |
-| `apply_proposal` | Sends ONE saved proposal to LinkedIn — **the only write tool**. Requires a human to have approved the diff in chat first. | yes |
+| `apply_proposal` | Sends ONE saved proposal to LinkedIn — **the only write tool**. Code-enforced confirm gate: it refuses unless called with `approval="approve <proposal_id>"`, a phrase supplied only after the human has reviewed the diff in chat. | yes |
 
 Proposals persist under `~/.config/linkedin-mcp/proposals/` so an approval
 can happen in a later session. Tokens and client credentials live in

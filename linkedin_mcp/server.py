@@ -211,14 +211,26 @@ def discard_proposal(proposal_id: str) -> dict[str, Any]:
         "THE ONLY TOOL THAT WRITES TO LINKEDIN. Sends the single prepared request "
         "stored in one proposal. Requires the human to have approved the returned diff "
         "in chat first — never call it on your own initiative, and never immediately "
-        "after propose_edit without that approval. Until LinkedIn grants partner "
-        "access to the Profile Edit API, an invalid-scope / permission error here is "
-        "EXPECTED and is not a defect: report it plainly and stop, do not attempt any "
-        "workaround."
+        "after propose_edit without that approval. The approval is code-enforced: "
+        "the 'approval' argument must be exactly 'approve <proposal_id>', supplied "
+        "only after the human has seen the diff and said yes in chat. Until "
+        "LinkedIn grants partner access to the Profile Edit API, an invalid-scope / "
+        "permission error here is EXPECTED and is not a defect: report it plainly "
+        "and stop, do not attempt any workaround."
     )
 )
-def apply_proposal(proposal_id: str) -> dict[str, Any]:
+def apply_proposal(proposal_id: str, approval: str | None = None) -> dict[str, Any]:
     try:
+        # The confirm-gate comes FIRST: nothing is loaded, claimed, or sent
+        # until the verbatim approval phrase is present. The phrase names the
+        # proposal id, so approval of one diff can never authorize another.
+        expected = f"approve {proposal_id}"
+        if approval != expected:
+            raise proposals.ProposalError(
+                "refused: apply_proposal requires the verbatim approval phrase "
+                f"{expected!r} in the 'approval' argument, given only after the "
+                "human has reviewed the diff in chat"
+            )
         # Fail fast on a bad id before any credential or client is touched.
         proposals.load_proposal(proposal_id)
         with _client() as client:

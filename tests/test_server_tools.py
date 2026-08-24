@@ -53,7 +53,8 @@ def test_propose_edit_tool_returns_a_diff_and_writes_nothing(mock_linkedin):
 
 def test_propose_then_apply_at_the_tool_boundary(mock_linkedin):
     proposed = server.propose_edit("headline", {"text": "New"})
-    applied = server.apply_proposal(proposed["proposal_id"])
+    pid = proposed["proposal_id"]
+    applied = server.apply_proposal(pid, approval=f"approve {pid}")
 
     assert applied["ok"] is True
     assert applied["status"] == proposals.STATUS_APPLIED
@@ -72,7 +73,8 @@ def test_list_and_discard_tools(mock_linkedin):
 
 
 def test_apply_unknown_proposal_returns_an_error_envelope(isolated_config):
-    result = server.apply_proposal("deadbeef" * 4)
+    bad_id = "deadbeef" * 4
+    result = server.apply_proposal(bad_id, approval=f"approve {bad_id}")
     assert result["ok"] is False
     assert result["error"] == "ProposalError"
 
@@ -127,7 +129,8 @@ def test_apply_reports_expected_pre_approval_error(isolated_config, monkeypatch)
         "_client",
         lambda: api.LinkedInClient("tok", transport=httpx.MockTransport(handler)),
     )
-    result = server.apply_proposal(proposed["proposal_id"])
+    pid = proposed["proposal_id"]
+    result = server.apply_proposal(pid, approval=f"approve {pid}")
     assert result["ok"] is False
     assert result["expected_pre_approval"] is True
     assert result["status"] == proposals.STATUS_PENDING
@@ -173,3 +176,32 @@ def test_propose_edit_with_explicit_person_id_diffs_against_current_value(mock_l
     assert "Current headline from the mock profile" in result["diff"]
     # and still zero writes on the wire
     assert mock_linkedin.non_get_requests == []
+
+
+# --- round 8: approval is code-enforced, not advisory -------------------------
+
+
+def test_apply_without_the_approval_phrase_is_refused_and_sends_nothing(mock_linkedin):
+    proposed = server.propose_edit("headline", {"text": "New"}, person_id=PERSON_ID)
+    result = server.apply_proposal(proposed["proposal_id"])
+    assert result["ok"] is False
+    assert "approve" in result["message"].lower()
+    assert mock_linkedin.non_get_requests == []
+    # still pending and retryable
+    listed = server.list_proposals()
+    assert any(p["proposal_id"] == proposed["proposal_id"] for p in listed["proposals"])
+
+
+def test_apply_with_a_wrong_approval_phrase_is_refused(mock_linkedin):
+    proposed = server.propose_edit("headline", {"text": "New"}, person_id=PERSON_ID)
+    result = server.apply_proposal(proposed["proposal_id"], approval="yes please")
+    assert result["ok"] is False
+    assert mock_linkedin.non_get_requests == []
+
+
+def test_apply_with_the_exact_approval_phrase_sends_the_write(mock_linkedin):
+    proposed = server.propose_edit("headline", {"text": "New"}, person_id=PERSON_ID)
+    pid = proposed["proposal_id"]
+    result = server.apply_proposal(pid, approval=f"approve {pid}")
+    assert result["ok"] is True
+    assert len(mock_linkedin.non_get_requests) == 1
