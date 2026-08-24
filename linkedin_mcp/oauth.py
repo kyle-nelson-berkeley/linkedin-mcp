@@ -30,9 +30,15 @@ from . import config
 AUTHORIZATION_URL = "https://www.linkedin.com/oauth/v2/authorization"
 ACCESS_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 
-# Both scopes appear in docs/api-notes.md: r_basicprofile in the sample token
-# response, w_compliance in the Profile Edit permission table.
-DEFAULT_SCOPE = "r_basicprofile w_compliance"
+# r_basicprofile appears in docs/api-notes.md's sample token response and is
+# grantable today. w_compliance (the Profile Edit permission) is a PRIVATE
+# permission granted to select developers — requesting it before LinkedIn
+# assigns it makes the authorization call fail with 401 invalid scope, which
+# would strand even the read-token flow. So the DEFAULT asks only for the
+# read scope; after partner approval, set LINKEDIN_SCOPE
+# ("r_basicprofile w_compliance") in ~/.config/linkedin-mcp/.env and re-run
+# auth_start.
+DEFAULT_SCOPE = "r_basicprofile"
 SCOPE_ENV_KEY = "LINKEDIN_SCOPE"
 
 STATE_BYTES = 16
@@ -302,7 +308,13 @@ def run_authorization_flow(
 
     listener = threading.Thread(target=_listen, daemon=True)
     listener.start()
-    wait_until_listening(host, port, timeout=5.0)
+    try:
+        wait_until_listening(host, port, timeout=5.0)
+    except OAuthError:
+        # Advisory only: a very fast callback can be served and the one-shot
+        # server closed before this probe ever connects. The join below and
+        # the outcome dict are the real authority on success or failure.
+        pass
 
     if open_browser:
         _open_browser(url)

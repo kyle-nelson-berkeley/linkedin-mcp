@@ -476,3 +476,29 @@ def test_listener_is_up_before_the_browser_opens(isolated_config, monkeypatch):
     )
     assert result["token"]["has_token"] is True
     assert config.access_token() == "AQVfast"
+
+
+# --- round 9: default scope must be grantable pre-approval ---------------------
+
+
+def test_default_scope_is_read_only_until_partner_approval(isolated_config):
+    """w_compliance is a private permission; requesting it before LinkedIn
+    assigns it makes the authorization call 401 (api-notes.md), stranding
+    even the read-token flow. The default must be the grantable read scope."""
+    config.write_values({"LINKEDIN_CLIENT_ID": "cid-1"})
+    url, _ = oauth.build_authorization_url(
+        client_id="cid-1", redirect_uri="http://localhost:1/cb", state="st"
+    )
+    params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+    assert params["scope"] == "r_basicprofile"
+
+
+def test_scope_override_can_add_the_write_scope_after_approval(isolated_config):
+    config.write_values(
+        {"LINKEDIN_CLIENT_ID": "cid-1", "LINKEDIN_SCOPE": "r_basicprofile w_compliance"}
+    )
+    url, _ = oauth.build_authorization_url(
+        client_id="cid-1", redirect_uri="http://localhost:1/cb", state="st"
+    )
+    params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+    assert params["scope"] == "r_basicprofile w_compliance"

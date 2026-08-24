@@ -212,3 +212,16 @@ def test_probe_aborts_when_no_current_headline_is_readable(
     config.write_values({config.KEY_ACCESS_TOKEN: "tok"})
     with pytest.raises(probe.ProbeError, match="headline"):
         probe.run_live_probe(transport=_readonly_probe_transport(profile_body))
+
+
+# --- round 9: opt-in must come from the PROCESS environment --------------------
+
+
+def test_probe_opt_in_ignores_a_stale_value_in_the_env_file(isolated_config, monkeypatch):
+    """A LINKEDIN_MCP_LIVE_PROBE=1 line persisted in ~/.config/linkedin-mcp/.env
+    must NOT arm the probe: the opt-in is per-invocation and comes only from
+    the process environment."""
+    monkeypatch.delenv(probe.LIVE_PROBE_ENV, raising=False)
+    config.write_values({probe.LIVE_PROBE_ENV: "1", config.KEY_ACCESS_TOKEN: "tok"})
+    with pytest.raises(probe.ProbeRefused):
+        probe.run_live_probe(transport=_readonly_probe_transport({"id": "x"}))

@@ -30,6 +30,8 @@ as AUTH_ERROR rather than as a confusing "the profile had no id" error.
 
 from __future__ import annotations
 
+import os
+
 import json
 from typing import Any
 
@@ -161,7 +163,10 @@ def _preflight_verdict(exc: httpx.HTTPStatusError) -> dict[str, Any]:
 
 
 def _require_opt_in() -> None:
-    if config.get(LIVE_PROBE_ENV) != "1":
+    # The opt-in is per-invocation and comes ONLY from the process
+    # environment. A stale LINKEDIN_MCP_LIVE_PROBE=1 persisted in the config
+    # .env file must never arm a real write.
+    if os.environ.get(LIVE_PROBE_ENV) != "1":
         raise ProbeRefused(
             f"refusing to run the live probe: set {LIVE_PROBE_ENV}=1 to opt in. "
             "It sends one REAL request to LinkedIn and must never run in tests or CI."

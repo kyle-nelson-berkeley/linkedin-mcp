@@ -93,6 +93,18 @@ any of this for you, and no personal values ever go in this repo.
 4. Run `auth_status` to confirm the token and its expiry (LinkedIn access
    tokens live 60 days; when one expires, run `auth_start` again — the
    consent screen is skipped while you're logged in).
+5. Scope note: this first sign-in requests only the read scope
+   (`r_basicprofile`) on purpose — the write scope `w_compliance` is a
+   private permission, and asking for it before LinkedIn assigns it makes
+   the whole authorization fail with "invalid scope". **After partner
+   approval lands**, add this line to `~/.config/linkedin-mcp/.env`:
+
+   ```
+   LINKEDIN_SCOPE=r_basicprofile w_compliance
+   ```
+
+   then run `auth_start` once more to get a token that carries the write
+   scope.
 
 ## 6. THE FIRST POST-OAUTH STEP: run the live probe
 
