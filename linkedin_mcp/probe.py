@@ -198,7 +198,17 @@ def run_live_probe(transport: httpx.BaseTransport | None = None) -> dict[str, An
             )
 
         person_id = str(profile["id"])
-        headline = profile.get("localizedHeadline") or "headline"
+        headline = profile.get("localizedHeadline")
+        if not isinstance(headline, str) or not headline.strip():
+            # Without a real current headline the "no-op" write would MUTATE
+            # the profile (set a literal fallback string). Abort instead —
+            # the probe must never invent content.
+            raise ProbeError(
+                "the profile read did not include a non-empty localizedHeadline "
+                "string, so a no-op write cannot be built; probing now would "
+                "OVERWRITE the profile headline. Aborting without sending "
+                "anything."
+            )
         prepared = api.build_headline_request(person_id, headline)
         result = client.send(prepared)
 

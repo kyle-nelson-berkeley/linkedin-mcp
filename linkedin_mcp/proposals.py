@@ -25,9 +25,13 @@ exactly one gets the file and the other gets a clean "already being applied"
 error without touching the network. The claim is what makes the write
 exactly-once; the file being gone from ``proposals/`` is the lock.
 
-After a definitive HTTP answer the claim is resolved: success moves the record
-to ``applied/``, a real error response moves it back to ``pending`` (LinkedIn
-answered, so the write did not land, and retrying is safe).
+After a definitive HTTP answer the claim is resolved: success (2xx) moves the
+record to ``applied/``; a 4xx moves it back to ``pending`` (LinkedIn
+definitively REJECTED the request, so the write did not land and retrying is
+safe). A 5xx (or any other odd status) is NOT proof the write failed — the
+server may have committed it before erroring — so the record stays claimed in
+``in-progress/`` for manual recovery, exactly like the indeterminate cases
+below.
 
 Anything else — a transport error mid-send, or the process dying — leaves the
 record in ``in-progress/``. That state is INDETERMINATE: the request may or may
@@ -490,9 +494,26 @@ def apply_proposal(
 
     record["last_response"] = response
     record["applied_at"] = int(time.time())
-    # LinkedIn answered, so the outcome is known: success is final, and a real
-    # error response means the write did not land, so retrying is safe.
-    _resolve_claim(record, claimed, STATUS_APPLIED if response["ok"] else STATUS_PENDING)
+    # Resolution semantics:
+    #   2xx           -> APPLIED (final).
+    #   4xx           -> PENDING: LinkedIn definitively REJECTED the request,
+    #                    so the write did not land and retrying is safe.
+    #   anything else -> stays CLAIMED: a 5xx (or other odd status) is NOT
+    #                    proof the write failed — LinkedIn may have committed
+    #                    it before erroring. Releasing it would let a retry
+    #                    duplicate the write; manual recovery only.
+    status_code = response.get("status_code", 0)
+    if response["ok"]:
+        _resolve_claim(record, claimed, STATUS_APPLIED)
+    elif 400 <= status_code < 500:
+        _resolve_claim(record, claimed, STATUS_PENDING)
+    else:
+        record["status"] = STATUS_CLAIMED
+        record["last_error"] = (
+            f"ambiguous server failure (HTTP {status_code}); the write may have "
+            "landed — kept claimed for manual recovery, will not auto-retry"
+        )
+        _save(record, config.claimed_dir())
 
     return {
         "proposal_id": record["proposal_id"],

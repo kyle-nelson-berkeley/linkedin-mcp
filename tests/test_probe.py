@@ -177,3 +177,38 @@ def test_preflight_404_on_the_profile_read_is_a_spec_error(isolated_config, monk
     assert result["outcome"] == probe.SPEC_ERROR
     assert result["is_failure"] is True
     assert len(seen) == 1
+
+
+# --- round 4: the probe must never invent a headline --------------------------
+
+
+def _readonly_probe_transport(profile_body):
+    """GET /v2/me returns the given profile; any write raises loudly."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/me":
+            return httpx.Response(200, json=profile_body)
+        raise AssertionError(
+            f"probe sent a write it must not have: {request.method} {request.url}"
+        )
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize(
+    "profile_body",
+    [
+        {"id": "abc123"},                            # headline absent
+        {"id": "abc123", "localizedHeadline": ""},   # empty
+        {"id": "abc123", "localizedHeadline": {"localized": {}}},  # non-string
+    ],
+)
+def test_probe_aborts_when_no_current_headline_is_readable(
+    isolated_config, monkeypatch, profile_body
+):
+    """Without a real current headline the 'no-op' probe would MUTATE the
+    profile (set it to a literal fallback string). It must abort instead."""
+    monkeypatch.setenv(probe.LIVE_PROBE_ENV, "1")
+    config.write_values({config.KEY_ACCESS_TOKEN: "tok"})
+    with pytest.raises(probe.ProbeError, match="headline"):
+        probe.run_live_probe(transport=_readonly_probe_transport(profile_body))

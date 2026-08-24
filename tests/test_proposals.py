@@ -536,3 +536,46 @@ def test_a_corrupt_claim_still_refuses_instead_of_resending(isolated_config):
 
     assert "claimed" in str(excinfo.value)
     assert mock.non_get_requests == []
+
+
+# --- round 4: ambiguous server failures stay claimed --------------------------
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+def test_an_ambiguous_5xx_failure_keeps_the_proposal_claimed(isolated_config, status_code):
+    """A 5xx is NOT proof the write did not land — LinkedIn may have committed
+    it before failing. The claim must stand for manual recovery; releasing it
+    to pending would let a retry duplicate the write."""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"message": "server error"})
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    proposal_id = _headline_proposal()["proposal_id"]
+    outcome = proposals.apply_proposal(proposal_id, client=client)
+
+    assert outcome["status"] == proposals.STATUS_CLAIMED
+    assert _claimed_path(proposal_id).exists()
+    assert not _pending_path(proposal_id).exists()
+    stored = proposals.load_proposal(proposal_id)
+    assert stored["last_response"]["status_code"] == status_code
+
+
+def test_a_claimed_5xx_proposal_refuses_a_retry_and_sends_nothing(isolated_config):
+    import httpx
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        return httpx.Response(503, json={"message": "server error"})
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    proposal_id = _headline_proposal()["proposal_id"]
+    proposals.apply_proposal(proposal_id, client=client)
+    sent_after_first = len(calls)
+
+    with pytest.raises(proposals.ProposalError):
+        proposals.apply_proposal(proposal_id, client=client)
+    assert len(calls) == sent_after_first  # retry sent nothing
