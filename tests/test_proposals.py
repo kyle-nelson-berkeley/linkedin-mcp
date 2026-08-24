@@ -667,3 +667,32 @@ def test_apply_still_works_when_the_proposal_targets_the_authenticated_member(is
     )
     assert outcome["response"]["ok"] is True
     assert len(mock.non_get_requests) == 1
+
+
+# --- round 11: a field absent from a good profile read is UNKNOWN, not empty --
+
+
+def test_a_missing_headline_in_a_successful_read_is_marked_unavailable(isolated_config):
+    """GET /v2/me succeeded but carried no headline: the before-value is
+    UNKNOWN. Showing it as empty would misrepresent a whole-field overwrite."""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": PERSON_ID})  # no localizedHeadline
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    record = proposals.propose_edit("headline", {"text": "New"}, client=client)
+    assert record["current_value_unavailable"] is True
+    assert "unavailable" in record["diff"].lower()
+
+
+def test_a_present_empty_headline_string_is_still_a_real_value(isolated_config):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": PERSON_ID, "localizedHeadline": "Old one"})
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    record = proposals.propose_edit("headline", {"text": "New"}, client=client)
+    assert record["current_value_unavailable"] is False
+    assert "Old one" in record["diff"]

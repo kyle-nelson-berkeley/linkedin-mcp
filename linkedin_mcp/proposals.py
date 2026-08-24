@@ -98,20 +98,22 @@ def _resolve_person_id(person_id: str | None, profile: Mapping[str, Any] | None)
     return str(resolved)
 
 
-def _current_headline(profile: Mapping[str, Any] | None, locale: str) -> str:
+def _current_headline(profile: Mapping[str, Any] | None, locale: str) -> str | None:
+    """The current headline, or None when the profile does not carry one."""
     if not profile:
-        return ""
+        return None
     localized = profile.get("localizedHeadline")
     if isinstance(localized, str):
         return localized
     nested = (profile.get("headline") or {}).get("localized") or {}
     value = nested.get(locale)
-    return value if isinstance(value, str) else ""
+    return value if isinstance(value, str) else None
 
 
-def _current_summary(profile: Mapping[str, Any] | None, locale: str) -> str:
+def _current_summary(profile: Mapping[str, Any] | None, locale: str) -> str | None:
+    """The current summary, or None when the profile does not carry one."""
     if not profile:
-        return ""
+        return None
     localized = profile.get("localizedSummary")
     if isinstance(localized, str):
         return localized
@@ -119,8 +121,8 @@ def _current_summary(profile: Mapping[str, Any] | None, locale: str) -> str:
     entry = nested.get(locale)
     if isinstance(entry, Mapping):
         raw = entry.get("rawText")
-        return raw if isinstance(raw, str) else ""
-    return entry if isinstance(entry, str) else ""
+        return raw if isinstance(raw, str) else None
+    return entry if isinstance(entry, str) else None
 
 
 def build_diff(current: str, proposed: str, label: str) -> str:
@@ -258,13 +260,15 @@ def propose_edit(
             f"{profile.get('id')!r} — this server edits the owner's own profile only"
         )
 
-    current_unavailable = (
-        section in BASIC_SECTIONS and profile is None and read_error is not None
-    )
+    current_unavailable = section in BASIC_SECTIONS and current is None
     if current_unavailable:
-        current = (
-            f"«current {section} unavailable — profile read failed: {read_error}»"
+        reason = (
+            f"profile read failed: {read_error}"
+            if read_error is not None
+            else "not present in the profile response"
         )
+        current = f"«current {section} unavailable — {reason}»"
+    current = current if current is not None else ""
 
     record = {
         "proposal_id": uuid.uuid4().hex,
