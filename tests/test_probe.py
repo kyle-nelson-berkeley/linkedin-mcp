@@ -1,15 +1,17 @@
 """Proof (g): the live-probe discriminator and its env-flag refusal.
 
-THE PROBE ITSELF IS NEVER EXECUTED HERE. Only the pure discriminator function
-and the refusal path are exercised; the refusal path raises before any client is
-constructed, so no socket is ever opened.
+THE PROBE NEVER REACHES THE NETWORK HERE. The pure discriminator function and
+the refusal path need no client at all (the refusal raises before one is built),
+and the two preflight tests drive ``run_live_probe`` through an
+``httpx.MockTransport`` whose handler fails loudly on any non-GET request.
 """
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
-from linkedin_mcp import probe
+from linkedin_mcp import config, probe
 
 
 def test_403_is_expected_pre_approval():
@@ -105,3 +107,51 @@ def test_probe_with_flag_but_no_token_fails_before_any_network(isolated_config, 
     monkeypatch.setattr(probe.httpx, "Client", explode)
     with pytest.raises(probe.ProbeError):
         probe.run_live_probe()
+
+
+# --- preflight: a failed profile READ is an auth failure, not a missing id ----
+
+
+def _probe_transport(status_code: int, body, seen: list):
+    def handler(request):
+        seen.append((request.method, str(request.url)))
+        if request.method != "GET":
+            raise AssertionError(
+                "the probe sent a WRITE after the profile read failed: "
+                f"{request.method} {request.url}"
+            )
+        return httpx.Response(status_code, json=body)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize(
+    "body", [{"message": "Expired access token"}, {"message": "Not enough permissions"}]
+)
+def test_preflight_401_is_an_auth_error_not_a_missing_id_error(
+    isolated_config, monkeypatch, body
+):
+    monkeypatch.setenv(probe.LIVE_PROBE_ENV, "1")
+    config.write_values({config.KEY_ACCESS_TOKEN: "tok"})
+    seen: list = []
+
+    result = probe.run_live_probe(transport=_probe_transport(401, body, seen))
+
+    assert result["outcome"] == probe.AUTH_ERROR
+    assert result["is_failure"] is True
+    assert result["status_code"] == 401
+    assert result["request"] == {"method": "GET", "url": "https://api.linkedin.com/v2/me"}
+    assert seen == [("GET", "https://api.linkedin.com/v2/me")]
+
+
+def test_preflight_404_on_the_profile_read_is_a_spec_error(isolated_config, monkeypatch):
+    monkeypatch.setenv(probe.LIVE_PROBE_ENV, "1")
+    config.write_values({config.KEY_ACCESS_TOKEN: "tok"})
+    seen: list = []
+
+    result = probe.run_live_probe(
+        transport=_probe_transport(404, {"message": "Not Found"}, seen)
+    )
+    assert result["outcome"] == probe.SPEC_ERROR
+    assert result["is_failure"] is True
+    assert len(seen) == 1

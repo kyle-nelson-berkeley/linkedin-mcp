@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from . import api, config, oauth, proposals
@@ -38,7 +39,18 @@ def _client() -> api.LinkedInClient:
 
 
 def _error(exc: Exception) -> dict[str, Any]:
-    """Uniform, secret-free error envelope."""
+    """Uniform, secret-free error envelope.
+
+    A failed HTTP call carries its status code, so a caller can tell an expired
+    token (401) from a drifted endpoint (404) without parsing prose.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return {
+            "ok": False,
+            "error": type(exc).__name__,
+            "status_code": exc.response.status_code,
+            "message": api.http_error_summary(exc),
+        }
     return {"ok": False, "error": type(exc).__name__, "message": str(exc)}
 
 

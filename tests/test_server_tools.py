@@ -131,3 +131,29 @@ def test_apply_reports_expected_pre_approval_error(isolated_config, monkeypatch)
     assert result["ok"] is False
     assert result["expected_pre_approval"] is True
     assert result["status"] == proposals.STATUS_PENDING
+
+
+@pytest.mark.parametrize("status_code", [401, 500])
+def test_get_profile_reports_a_failed_read_as_ok_false_with_the_status(
+    isolated_config, monkeypatch, status_code
+):
+    config.write_values({config.KEY_ACCESS_TOKEN: "AQVsecret-value"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"message": "Expired access token"})
+
+    monkeypatch.setattr(
+        server,
+        "_client",
+        lambda: api.LinkedInClient(
+            "AQVsecret-value", transport=httpx.MockTransport(handler)
+        ),
+    )
+    result = server.get_profile()
+
+    assert result["ok"] is False
+    assert result["status_code"] == status_code
+    assert "profile" not in result
+    assert str(status_code) in result["message"]
+    assert "Expired access token" in result["message"]
+    assert "AQVsecret-value" not in repr(result)

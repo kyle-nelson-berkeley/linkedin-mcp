@@ -11,6 +11,7 @@ Nothing here decides *whether* to write — that is the proposal layer's job.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -57,6 +58,11 @@ LOCALIZED_SUB_FIELDS: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_TIMEOUT = 30.0
+
+# How much of a failed response body an error summary may quote. Bodies are
+# LinkedIn's own error text (never a secret), but they are still untrusted
+# input, so the quote is bounded.
+MAX_ERROR_DETAIL = 300
 
 
 class ApiError(RuntimeError):
@@ -257,10 +263,17 @@ class LinkedInClient:
         return {**dict(headers), "Authorization": f"Bearer {self._token}"}
 
     def get_profile(self) -> Any:
+        """Read GET /v2/me. Raises ``httpx.HTTPStatusError`` on any non-2xx.
+
+        A read that failed is NOT profile data: returning the decoded error body
+        would let a caller report success while holding an error payload (and
+        would make an expired token look like a profile without an id).
+        """
         response = self._client.get(
             f"{BASE_URL}{PROFILE_PATH}", headers=self._auth_headers(_base_headers())
         )
-        return _decode_body(response)
+        response.raise_for_status()
+        return decode_body(response)
 
     def send(self, prepared: PreparedRequest) -> dict[str, Any]:
         """Send exactly ONE prepared request and return a recordable result."""
@@ -275,13 +288,36 @@ class LinkedInClient:
             "url": prepared.url,
             "status_code": response.status_code,
             "ok": response.is_success,
-            "body": _decode_body(response),
+            "body": decode_body(response),
             "created_entity_id": response.headers.get(CREATED_ID_HEADER),
         }
 
 
-def _decode_body(response: httpx.Response) -> Any:
+def decode_body(response: httpx.Response) -> Any:
     try:
         return response.json()
     except ValueError:
         return response.text
+
+
+def http_error_summary(exc: httpx.HTTPStatusError) -> str:
+    """One safe line describing a failed response.
+
+    Quotes the status, the method + PATH (never the query string), and a bounded
+    slice of LinkedIn's error body. Request headers — where the bearer token
+    lives — are never touched.
+    """
+    detail = decode_body(exc.response)
+    if not isinstance(detail, str):
+        try:
+            detail = json.dumps(detail, sort_keys=True)
+        except (TypeError, ValueError):
+            detail = str(detail)
+    detail = detail.strip()
+    if len(detail) > MAX_ERROR_DETAIL:
+        detail = detail[:MAX_ERROR_DETAIL] + "..."
+    summary = (
+        f"LinkedIn returned HTTP {exc.response.status_code} for "
+        f"{exc.request.method} {exc.request.url.path}"
+    )
+    return f"{summary}: {detail}" if detail else summary

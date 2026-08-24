@@ -260,3 +260,44 @@ def test_send_never_echoes_the_token():
     )
     result = client.send(api.build_headline_request(PERSON, "x"))
     assert "AQVsecret-value" not in repr(result)
+
+
+# --- the read path must RAISE on a non-2xx, never hand back an error body ----
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 404, 500])
+def test_get_profile_raises_on_a_non_2xx_instead_of_returning_the_error_body(status_code):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"message": "nope", "status": status_code})
+
+    client = api.LinkedInClient(access_token="tok", transport=_transport(handler))
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        client.get_profile()
+    assert excinfo.value.response.status_code == status_code
+
+
+def test_http_error_summary_names_the_status_and_never_echoes_the_token():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Expired access token"})
+
+    client = api.LinkedInClient(
+        access_token="AQVsecret-value", transport=_transport(handler)
+    )
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        client.get_profile()
+
+    summary = api.http_error_summary(excinfo.value)
+    assert "401" in summary
+    assert "/v2/me" in summary
+    assert "Expired access token" in summary
+    assert "AQVsecret-value" not in summary
+
+
+def test_http_error_summary_truncates_a_huge_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="x" * 5000)
+
+    client = api.LinkedInClient(access_token="tok", transport=_transport(handler))
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        client.get_profile()
+    assert len(api.http_error_summary(excinfo.value)) < 500

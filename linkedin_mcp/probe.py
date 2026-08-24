@@ -19,6 +19,11 @@ Outcomes (docs/api-notes.md, "Partner gating"):
   and re-verify docs/api-notes.md against the live docs. Do not work around it.
 * WRITE_OK             — partner access is live and the write path works.
 * UNKNOWN              — anything else; reported as a failure, never as a pass.
+
+The probe first READS the profile to learn the person id. If that read fails,
+the probe stops there and reports the read's own status (``phase`` =
+``preflight_profile_read``) without sending any write — an expired token surfaces
+as AUTH_ERROR rather than as a confusing "the profile had no id" error.
 """
 
 from __future__ import annotations
@@ -122,6 +127,31 @@ def discriminate(status_code: int, body: Any) -> dict[str, Any]:
     }
 
 
+def _preflight_verdict(exc: httpx.HTTPStatusError) -> dict[str, Any]:
+    """Classify a failed GET /v2/me. Always a failure — no write was attempted.
+
+    ``discriminate`` can only return a non-failure outcome here for a 401/403
+    carrying a scope marker; on the READ path that means the read itself is not
+    permitted, which is an auth/setup problem, not the expected partner gate on
+    writes. So it is reported as AUTH_ERROR.
+    """
+    body = api.decode_body(exc.response)
+    verdict = discriminate(exc.response.status_code, body)
+    if not verdict["is_failure"]:
+        verdict = {
+            **verdict,
+            "outcome": AUTH_ERROR,
+            "explanation": _EXPLANATIONS[AUTH_ERROR],
+            "is_failure": True,
+        }
+    return {
+        **verdict,
+        "phase": "preflight_profile_read",
+        "request": {"method": "GET", "url": f"{api.BASE_URL}{api.PROFILE_PATH}"},
+        "response_body": body,
+    }
+
+
 def _require_opt_in() -> None:
     if config.get(LIVE_PROBE_ENV) != "1":
         raise ProbeRefused(
@@ -144,6 +174,12 @@ def run_live_probe(transport: httpx.BaseTransport | None = None) -> dict[str, An
     with api.LinkedInClient(token, transport=transport) as client:
         try:
             profile = client.get_profile()
+        except httpx.HTTPStatusError as exc:
+            # LinkedIn answered the preflight READ with an error. Report that
+            # answer instead of stumbling on into a "no id in the profile"
+            # complaint — and send NO write, because nothing was learned about
+            # the write endpoint.
+            return _preflight_verdict(exc)
         except httpx.HTTPError as exc:
             raise ProbeError(f"could not read the profile before probing: {exc}") from exc
 
