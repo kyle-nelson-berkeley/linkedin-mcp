@@ -39,8 +39,17 @@ _ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
 
 # Signals that a write failed because partner approval has not landed yet —
 # expected, not a defect (docs/api-notes.md, "Partner gating").
-_PRE_APPROVAL_MARKERS = ("invalid scope", "access_denied", "permission", "not enough permissions")
-_PRE_APPROVAL_STATUSES = (401, 403)
+# A bare 401/403 with none of these is a bad or expired token, NOT pre-approval.
+_PRE_APPROVAL_MARKERS = (
+    "invalid scope",
+    "invalid_scope",
+    "access_denied",
+    "permission",
+    "not permitted",
+    "not_authorized",
+    "not authorized",
+    "unpermitted",
+)
 
 
 class ProposalError(RuntimeError):
@@ -314,10 +323,14 @@ def discard_proposal(proposal_id: str) -> dict[str, Any]:
 
 
 def looks_like_pre_approval(status_code: int, body: Any) -> bool:
-    """True when a failure is the EXPECTED 'partner approval not granted yet'."""
+    """True when a failure is the EXPECTED 'partner approval not granted yet'.
+
+    An explicit scope/permission marker in the body is required. ``status_code`` is
+    kept for the caller's signature and for symmetry with ``probe.discriminate``; a
+    bare 401/403 means a bad or expired token, which is a real failure, not this.
+    """
+    del status_code  # deliberately not a signal — see the docstring
     text = body.lower() if isinstance(body, str) else json.dumps(body).lower()
-    if status_code in _PRE_APPROVAL_STATUSES:
-        return True
     return any(marker in text for marker in _PRE_APPROVAL_MARKERS)
 
 

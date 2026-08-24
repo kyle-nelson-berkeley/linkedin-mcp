@@ -58,6 +58,40 @@ def test_live_probe_exits_nonzero_on_spec_error(isolated_config, monkeypatch, ca
     assert probe.SPEC_ERROR in capsys.readouterr().out
 
 
+def test_live_probe_exits_with_a_distinct_code_on_auth_error(
+    isolated_config, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        probe,
+        "run_live_probe",
+        lambda: {
+            **probe.discriminate(401, ""),
+            "request": {"method": "POST", "url": "https://api.linkedin.com/v2/people/(id:X)"},
+            "response_body": "",
+        },
+    )
+    exit_code = cli.main(["--live-probe"])
+    out = capsys.readouterr().out
+    assert exit_code == cli.EXIT_AUTH_ERROR
+    assert exit_code not in (cli.EXIT_OK, cli.EXIT_FAILURE, cli.EXIT_REFUSED)
+    assert probe.AUTH_ERROR in out
+    assert "auth_start" in out
+
+
+def test_live_probe_exits_nonzero_on_an_unknown_outcome(isolated_config, monkeypatch, capsys):
+    monkeypatch.setattr(
+        probe,
+        "run_live_probe",
+        lambda: {
+            **probe.discriminate(503, {"message": "upstream unavailable"}),
+            "request": {"method": "POST", "url": "https://api.linkedin.com/v2/people/(id:X)"},
+            "response_body": {"message": "upstream unavailable"},
+        },
+    )
+    assert cli.main(["--live-probe"]) == cli.EXIT_FAILURE
+    assert probe.UNKNOWN in capsys.readouterr().out
+
+
 def test_default_invocation_starts_the_stdio_server(isolated_config, monkeypatch):
     from linkedin_mcp import server
 

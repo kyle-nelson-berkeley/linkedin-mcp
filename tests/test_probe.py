@@ -19,21 +19,43 @@ def test_403_is_expected_pre_approval():
     assert "partner" in result["explanation"].lower()
 
 
-def test_403_without_a_helpful_body_is_still_pre_approval():
-    assert probe.discriminate(403, "")["outcome"] == probe.EXPECTED_PRE_APPROVAL
+@pytest.mark.parametrize("status_code", [401, 403])
+@pytest.mark.parametrize("body", ["", {}, None, {"message": "Unauthorized"}])
+def test_a_bare_401_403_without_a_marker_is_an_auth_error(status_code, body):
+    result = probe.discriminate(status_code, body)
+    assert result["outcome"] == probe.AUTH_ERROR
+    assert result["is_failure"] is True
+    explanation = result["explanation"].lower()
+    assert "expired" in explanation
+    assert "auth_start" in explanation
 
 
+def test_auth_error_is_a_distinct_outcome_from_spec_error():
+    assert probe.AUTH_ERROR != probe.SPEC_ERROR
+    assert probe.discriminate(401, "")["outcome"] != probe.discriminate(404, "")["outcome"]
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
 @pytest.mark.parametrize(
     "body",
     [
         {"message": "invalid scope"},
         {"serviceErrorCode": 100, "message": "ACCESS_DENIED"},
         "permission-denied for this member",
+        {"message": "NOT_AUTHORIZED"},
+        "this member is not permitted to perform that action",
     ],
 )
-def test_scope_and_access_messages_are_expected_pre_approval(body):
-    result = probe.discriminate(401, body)
+def test_scope_and_access_messages_are_expected_pre_approval(body, status_code):
+    result = probe.discriminate(status_code, body)
     assert result["outcome"] == probe.EXPECTED_PRE_APPROVAL
+    assert result["is_failure"] is False
+
+
+def test_a_marker_counts_even_without_a_401_403_status():
+    result = probe.discriminate(500, {"message": "invalid scope"})
+    assert result["outcome"] == probe.EXPECTED_PRE_APPROVAL
+    assert result["is_failure"] is False
 
 
 def test_404_is_a_spec_error():

@@ -12,6 +12,7 @@ import sys
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_REFUSED = 2
+EXIT_AUTH_ERROR = 3  # bad/expired token — distinct from a spec drift or unknown failure
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -45,7 +46,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"live probe could not run: {exc}", file=sys.stderr)
             return EXIT_FAILURE
         print(probe.format_report(result))
-        return EXIT_FAILURE if result["is_failure"] else EXIT_OK
+        if not result["is_failure"]:
+            return EXIT_OK
+        if result["outcome"] == probe.AUTH_ERROR:
+            return EXIT_AUTH_ERROR
+        return EXIT_FAILURE
 
     from . import server
 

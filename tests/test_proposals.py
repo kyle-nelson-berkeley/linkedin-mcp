@@ -258,5 +258,29 @@ def test_failed_apply_keeps_the_proposal_pending_and_records_the_error(isolated_
     assert stored["last_response"]["status_code"] == 403
 
 
+def test_a_bare_401_apply_failure_is_not_reported_as_expected_pre_approval(isolated_config):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Unauthorized"})
+
+    client = api.LinkedInClient(
+        access_token="tok", transport=httpx.MockTransport(handler)
+    )
+    result = _headline_proposal()
+    outcome = proposals.apply_proposal(result["proposal_id"], client=client)
+
+    assert outcome["response"]["status_code"] == 401
+    assert outcome["expected_pre_approval"] is False
+    assert outcome["status"] == proposals.STATUS_PENDING
+
+
+def test_looks_like_pre_approval_needs_a_marker_not_just_a_401_403():
+    assert proposals.looks_like_pre_approval(403, "") is False
+    assert proposals.looks_like_pre_approval(401, {"message": "Unauthorized"}) is False
+    assert proposals.looks_like_pre_approval(403, {"message": "Not enough permissions"}) is True
+    assert proposals.looks_like_pre_approval(401, {"message": "invalid scope"}) is True
+
+
 def _client(mock: GrantedWriteLinkedIn) -> api.LinkedInClient:
     return api.LinkedInClient(access_token="test-token", transport=mock.transport)

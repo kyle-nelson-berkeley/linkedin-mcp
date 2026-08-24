@@ -11,7 +11,10 @@ the answer through ``discriminate`` — a pure function, unit-tested with mocks.
 Outcomes (docs/api-notes.md, "Partner gating"):
 
 * EXPECTED_PRE_APPROVAL — endpoint shape verified, setup correct, LinkedIn is
-  refusing because partner approval has not landed. Wait; do not work around it.
+  refusing because partner approval has not landed. This needs an explicit
+  scope/permission marker in the body. Wait; do not work around it.
+* AUTH_ERROR           — a bare 401/403 with NO scope/permission marker: the
+  token is invalid or expired. A failure, distinct from SPEC_ERROR.
 * SPEC_ERROR           — the endpoint spec has drifted. Report it as a failure
   and re-verify docs/api-notes.md against the live docs. Do not work around it.
 * WRITE_OK             — partner access is live and the write path works.
@@ -30,18 +33,20 @@ from . import api, config
 LIVE_PROBE_ENV = "LINKEDIN_MCP_LIVE_PROBE"
 
 EXPECTED_PRE_APPROVAL = "EXPECTED_PRE_APPROVAL"
+AUTH_ERROR = "AUTH_ERROR"
 SPEC_ERROR = "SPEC_ERROR"
 WRITE_OK = "WRITE_OK"
 UNKNOWN = "UNKNOWN"
 
-_PRE_APPROVAL_STATUSES = (401, 403)
+_AUTH_STATUSES = (401, 403)
 _PRE_APPROVAL_MARKERS = (
     "invalid scope",
     "invalid_scope",
     "access_denied",
-    "permission-denied",
-    "permission denied",
-    "not enough permissions",
+    "permission",
+    "not permitted",
+    "not_authorized",
+    "not authorized",
     "unpermitted",
 )
 _SPEC_ERROR_STATUSES = (400, 404, 405, 422)
@@ -52,6 +57,12 @@ _EXPLANATIONS = {
         "because partner approval for the Profile Edit API has not landed yet. This is "
         "the expected outcome before approval. Wait for the partner program; do not "
         "work around it."
+    ),
+    AUTH_ERROR: (
+        "LinkedIn rejected the credentials and said nothing about scopes or "
+        "permissions: the access token is invalid or expired — re-run auth_start to "
+        "get a fresh one, then probe again. This is a FAILURE, and it is NOT the "
+        "expected pre-approval outcome: nothing here proves the endpoint shape."
     ),
     SPEC_ERROR: (
         "LinkedIn did not recognise the request. The spec this server was built from "
@@ -92,10 +103,12 @@ def discriminate(status_code: int, body: Any) -> dict[str, Any]:
 
     if 200 <= status_code < 300:
         outcome = WRITE_OK
-    elif status_code in _PRE_APPROVAL_STATUSES or any(
-        marker in text for marker in _PRE_APPROVAL_MARKERS
-    ):
+    elif any(marker in text for marker in _PRE_APPROVAL_MARKERS):
+        # Only an explicit scope/permission marker proves "setup correct, waiting
+        # on partner approval". A bare 401/403 proves nothing of the sort.
         outcome = EXPECTED_PRE_APPROVAL
+    elif status_code in _AUTH_STATUSES:
+        outcome = AUTH_ERROR
     elif status_code in _SPEC_ERROR_STATUSES:
         outcome = SPEC_ERROR
     else:
@@ -105,7 +118,7 @@ def discriminate(status_code: int, body: Any) -> dict[str, Any]:
         "outcome": outcome,
         "status_code": status_code,
         "explanation": _EXPLANATIONS[outcome],
-        "is_failure": outcome in (SPEC_ERROR, UNKNOWN),
+        "is_failure": outcome in (AUTH_ERROR, SPEC_ERROR, UNKNOWN),
     }
 
 
