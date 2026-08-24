@@ -7,6 +7,36 @@ and only when the caller hands it a client and no profile snapshot.
 
 ``apply_proposal`` is the sole write path: it loads one saved proposal and sends
 exactly that one prepared request.
+
+Exactly-once, and how a proposal is recovered
+---------------------------------------------
+A proposal file lives in exactly one of three directories, and the file's
+location IS its state:
+
+* ``proposals/``            — pending: not sent, safe to apply or discard.
+* ``proposals/in-progress/`` — claimed: a caller has taken ownership of this
+  proposal and its one write is in flight, or was in flight when something went
+  wrong.
+* ``proposals/applied/``    — applied: sent, and LinkedIn answered with success.
+
+``apply_proposal`` CLAIMS before it sends: it ``os.rename``s the pending file
+into ``in-progress/``, which is atomic on POSIX, so of two concurrent callers
+exactly one gets the file and the other gets a clean "already being applied"
+error without touching the network. The claim is what makes the write
+exactly-once; the file being gone from ``proposals/`` is the lock.
+
+After a definitive HTTP answer the claim is resolved: success moves the record
+to ``applied/``, a real error response moves it back to ``pending`` (LinkedIn
+answered, so the write did not land, and retrying is safe).
+
+Anything else — a transport error mid-send, or the process dying — leaves the
+record in ``in-progress/``. That state is INDETERMINATE: the request may or may
+not have reached LinkedIn. It is deliberately never retried automatically and
+``apply_proposal`` refuses it, because a silent re-send could duplicate an edit
+that already landed. Recovery is a human step: read the record with
+``load_proposal`` (a claim that got as far as an answer carries ``last_response``;
+one that did not carries ``last_error`` or neither), check the live profile, then
+``discard_proposal`` it and propose a fresh edit if the change is still wanted.
 """
 
 from __future__ import annotations
@@ -23,6 +53,7 @@ from typing import Any, Mapping
 from . import api, config, probe
 
 STATUS_PENDING = "pending"
+STATUS_CLAIMED = "claimed"
 STATUS_APPLIED = "applied"
 
 ACTION_CREATE = "create"
@@ -244,9 +275,19 @@ def _validate_id(proposal_id: str) -> str:
     return str(proposal_id)
 
 
-def _path_for(proposal_id: str, applied: bool = False) -> Path:
-    directory = config.applied_dir() if applied else config.proposals_dir()
-    return directory / f"{_validate_id(proposal_id)}.json"
+_STATE_DIRS = {
+    STATUS_PENDING: config.proposals_dir,
+    STATUS_CLAIMED: config.claimed_dir,
+    STATUS_APPLIED: config.applied_dir,
+}
+
+
+def _dir_for(state: str) -> Path:
+    return _STATE_DIRS[state]()
+
+
+def _path_for(proposal_id: str, state: str = STATUS_PENDING) -> Path:
+    return _dir_for(state) / f"{_validate_id(proposal_id)}.json"
 
 
 def _save(record: Mapping[str, Any], directory: Path) -> Path:
@@ -269,20 +310,23 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def load_proposal(proposal_id: str) -> dict[str, Any]:
-    pending = _path_for(proposal_id)
-    if pending.exists():
-        return _read(pending)
-    applied = _path_for(proposal_id, applied=True)
-    if applied.exists():
-        return _read(applied)
+    for state in _STATE_DIRS:
+        path = _path_for(proposal_id, state)
+        if path.exists():
+            return _read(path)
     raise ProposalError(f"no proposal with id {proposal_id}")
 
 
 def list_proposals(include_applied: bool = False) -> list[dict[str, Any]]:
+    """Pending proposals; with ``include_applied``, the finished and claimed ones too.
+
+    Claimed records are never listed as pending — they are not applicable — but
+    they are not invisible either, so an interrupted apply can be found.
+    """
     records: list[dict[str, Any]] = []
     directories = [config.proposals_dir()]
     if include_applied:
-        directories.append(config.applied_dir())
+        directories += [config.claimed_dir(), config.applied_dir()]
     for directory in directories:
         if not directory.exists():
             continue
@@ -292,8 +336,23 @@ def list_proposals(include_applied: bool = False) -> list[dict[str, Any]]:
 
 
 def discard_proposal(proposal_id: str) -> dict[str, Any]:
-    path = _path_for(proposal_id)
-    if not path.exists():
+    """Throw a proposal away. Also the recovery step for a stuck claim.
+
+    Discarding a claimed proposal only forgets the local record — it cannot undo
+    a write that may already have landed, so check the live profile first.
+    """
+    path = next(
+        (
+            candidate
+            for candidate in (
+                _path_for(proposal_id),
+                _path_for(proposal_id, STATUS_CLAIMED),
+            )
+            if candidate.exists()
+        ),
+        None,
+    )
+    if path is None:
         raise ProposalError(f"no pending proposal with id {proposal_id}")
     record = _read(path)
     path.unlink()
@@ -321,44 +380,119 @@ def looks_like_pre_approval(status_code: int, body: Any) -> bool:
     return probe.discriminate(status_code, body)["outcome"] == probe.EXPECTED_PRE_APPROVAL
 
 
+def _claim_conflict(proposal_id: str, claimed: Path) -> ProposalError:
+    """Explain a claim we did not win — and why it is not retried for you."""
+    try:
+        record = _read(claimed)
+    except ProposalError:
+        record = {}
+    if record.get("last_response") is not None:
+        detail = (
+            "it was already sent to LinkedIn and the answer recorded, but the apply "
+            "did not finish"
+        )
+    elif record.get("last_error"):
+        detail = (
+            "an earlier apply failed mid-send, so whether it reached LinkedIn is "
+            f"unknown ({record['last_error']})"
+        )
+    else:
+        detail = (
+            "it is already being applied, or an earlier apply was interrupted mid-send"
+        )
+    return ProposalError(
+        f"proposal {proposal_id} is claimed: {detail}. It will NOT be re-sent. "
+        "Check the live profile, then discard_proposal it and propose a fresh edit "
+        "if the change is still wanted."
+    )
+
+
+def _claim(proposal_id: str) -> Path:
+    """Take exclusive ownership of a pending proposal BEFORE anything is sent.
+
+    ``os.rename`` is atomic on POSIX, so when two callers race for the same
+    proposal exactly one moves the file; the loser sees FileNotFoundError and
+    never reaches the network.
+    """
+    pending = _path_for(proposal_id)
+    claimed = _path_for(proposal_id, STATUS_CLAIMED)
+    config.ensure_dir(config.claimed_dir())
+
+    if claimed.exists():
+        raise _claim_conflict(proposal_id, claimed)
+    try:
+        os.rename(pending, claimed)
+    except FileNotFoundError as exc:
+        if _path_for(proposal_id, STATUS_APPLIED).exists():
+            raise ProposalError(
+                f"proposal {proposal_id} was already applied — propose a new edit instead"
+            ) from exc
+        if claimed.exists():
+            raise _claim_conflict(proposal_id, claimed) from exc
+        raise ProposalError(f"no pending proposal with id {proposal_id}") from exc
+    return claimed
+
+
+def _release_claim(claimed: Path, proposal_id: str) -> None:
+    """Undo a claim taken for a proposal we then refused to send."""
+    os.rename(claimed, _path_for(proposal_id))
+
+
+def _resolve_claim(record: dict[str, Any], claimed: Path, state: str) -> None:
+    """Write the record into its new state, THEN drop the claim.
+
+    In that order: a crash between the two leaves both files, and a leftover
+    claim only ever costs a manual discard. The reverse order could lose the
+    record entirely.
+    """
+    record["status"] = state
+    _save(record, config.ensure_dir(_dir_for(state)))
+    claimed.unlink()
+
+
 def apply_proposal(
     proposal_id: str,
     *,
     client: "api.LinkedInClient | None" = None,
     transport: Any = None,
 ) -> dict[str, Any]:
-    """Send the ONE prepared request stored in a proposal. The only write path."""
-    path = _path_for(proposal_id)
-    if not path.exists():
-        if _path_for(proposal_id, applied=True).exists():
-            raise ProposalError(
-                f"proposal {proposal_id} was already applied — propose a new edit instead"
-            )
-        raise ProposalError(f"no pending proposal with id {proposal_id}")
+    """Send the ONE prepared request stored in a proposal. The only write path.
 
-    record = _read(path)
+    The proposal is claimed (atomically renamed out of ``proposals/``) before the
+    request goes out, so it can be sent at most once. See the module docstring
+    for what a claim left behind by a crash means and how to clear it.
+    """
+    claimed = _claim(proposal_id)
+    record = _read(claimed)
     if record.get("status") != STATUS_PENDING:
+        _release_claim(claimed, proposal_id)
         raise ProposalError(f"proposal {proposal_id} is not pending")
 
     prepared = api.PreparedRequest.from_dict(record["request"])
+    record["status"] = STATUS_CLAIMED
+    record["claimed_at"] = int(time.time())
+    _save(record, config.claimed_dir())
+
     owns_client = client is None
     if owns_client:
         client = api.LinkedInClient(config.access_token(), transport=transport)
     try:
         response = client.send(prepared)
+    except BaseException as exc:
+        # Indeterminate: the request may already be on the wire. Leave the claim
+        # standing so nothing re-sends it behind the owner's back.
+        record["last_error"] = str(exc) or type(exc).__name__
+        _save(record, config.claimed_dir())
+        raise
     finally:
         if owns_client:
             client.close()
 
     record["last_response"] = response
     record["applied_at"] = int(time.time())
-
-    if response["ok"]:
-        record["status"] = STATUS_APPLIED
-        _save(record, config.ensure_dir(config.applied_dir()))
-        path.unlink()
-    else:
-        _save(record, config.proposals_dir())
+    # LinkedIn answered, so the outcome is known: success is final, and a real
+    # error response means the write did not land, so retrying is safe.
+    _resolve_claim(record, claimed, STATUS_APPLIED if response["ok"] else STATUS_PENDING)
 
     return {
         "proposal_id": record["proposal_id"],

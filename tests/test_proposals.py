@@ -318,3 +318,221 @@ def test_a_400_apply_failure_mentioning_permission_is_not_pre_approval(isolated_
 
 def _client(mock: GrantedWriteLinkedIn) -> api.LinkedInClient:
     return api.LinkedInClient(access_token="test-token", transport=mock.transport)
+
+
+# --- exactly-once: the atomic claim ------------------------------------------
+
+
+def _pending_path(proposal_id: str):
+    return config.proposals_dir() / f"{proposal_id}.json"
+
+
+def _claimed_path(proposal_id: str):
+    return config.claimed_dir() / f"{proposal_id}.json"
+
+
+def _applied_path(proposal_id: str):
+    return config.applied_dir() / f"{proposal_id}.json"
+
+
+def test_a_successful_apply_leaves_nothing_claimed(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+    proposals.apply_proposal(proposal_id, client=_client(mock))
+
+    assert _applied_path(proposal_id).exists()
+    assert not _claimed_path(proposal_id).exists()
+    assert not _pending_path(proposal_id).exists()
+    assert len(mock.non_get_requests) == 1
+
+
+def test_applying_twice_sends_exactly_one_write(isolated_config):
+    """(i) The second call must be refused, and the wire must show ONE write."""
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+
+    proposals.apply_proposal(proposal_id, client=_client(mock))
+    with pytest.raises(proposals.ProposalError):
+        proposals.apply_proposal(proposal_id, client=_client(mock))
+
+    assert len(mock.non_get_requests) == 1
+
+
+def test_a_proposal_already_claimed_by_a_racing_call_is_refused_without_writing(
+    isolated_config,
+):
+    """(ii) Simulate the race: the winner already renamed the pending file away."""
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+
+    # The winning caller's claim, reproduced exactly: an os.rename of the pending
+    # file into the claim directory before any request is sent.
+    config.ensure_dir(config.claimed_dir())
+    os.rename(_pending_path(proposal_id), _claimed_path(proposal_id))
+
+    with pytest.raises(proposals.ProposalError) as excinfo:
+        proposals.apply_proposal(proposal_id, client=_client(mock))
+
+    assert "already" in str(excinfo.value).lower()
+    assert mock.non_get_requests == []
+
+
+def test_a_claim_that_recorded_a_response_is_never_resent(isolated_config):
+    """(iii) Crash after the send, before the bookkeeping: do NOT resend."""
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+
+    record = json.loads(_pending_path(proposal_id).read_text())
+    record["status"] = proposals.STATUS_CLAIMED
+    record["last_response"] = {"status_code": 200, "ok": True, "body": {"granted": True}}
+    config.ensure_dir(config.claimed_dir())
+    _claimed_path(proposal_id).write_text(json.dumps(record))
+    _pending_path(proposal_id).unlink()
+
+    with pytest.raises(proposals.ProposalError) as excinfo:
+        proposals.apply_proposal(proposal_id, client=_client(mock))
+
+    assert mock.non_get_requests == []
+    message = str(excinfo.value).lower()
+    assert "already" in message or "sent" in message
+
+
+def test_a_crash_mid_send_leaves_the_proposal_claimed_not_pending(isolated_config):
+    """A transport failure is INDETERMINATE — the write may or may not have landed."""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection reset mid-flight")
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    proposal_id = _headline_proposal()["proposal_id"]
+
+    with pytest.raises(httpx.HTTPError):
+        proposals.apply_proposal(proposal_id, client=client)
+
+    assert not _pending_path(proposal_id).exists()
+    assert not _applied_path(proposal_id).exists()
+    claimed = json.loads(_claimed_path(proposal_id).read_text())
+    assert claimed["status"] == proposals.STATUS_CLAIMED
+    assert "connection reset" in claimed["last_error"]
+
+    # And a retry does not quietly send it a second time.
+    mock = GrantedWriteLinkedIn()
+    with pytest.raises(proposals.ProposalError):
+        proposals.apply_proposal(proposal_id, client=_client(mock))
+    assert mock.non_get_requests == []
+
+
+def test_a_definitive_http_failure_returns_the_proposal_to_pending(isolated_config):
+    """A real HTTP answer means the write did NOT land, so retrying is safe."""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "Not enough permissions"})
+
+    client = api.LinkedInClient(access_token="tok", transport=httpx.MockTransport(handler))
+    proposal_id = _headline_proposal()["proposal_id"]
+    outcome = proposals.apply_proposal(proposal_id, client=client)
+
+    assert outcome["status"] == proposals.STATUS_PENDING
+    assert _pending_path(proposal_id).exists()
+    assert not _claimed_path(proposal_id).exists()
+    assert _mode(_pending_path(proposal_id)) == 0o600
+
+
+def test_a_claimed_proposal_is_still_loadable_and_discardable(isolated_config):
+    proposal_id = _headline_proposal()["proposal_id"]
+    config.ensure_dir(config.claimed_dir())
+    os.rename(_pending_path(proposal_id), _claimed_path(proposal_id))
+
+    assert proposals.load_proposal(proposal_id)["proposal_id"] == proposal_id
+    assert proposals.discard_proposal(proposal_id)["discarded"] is True
+    assert not _claimed_path(proposal_id).exists()
+
+
+def test_claimed_proposals_are_never_listed_as_pending(isolated_config):
+    proposal_id = _headline_proposal()["proposal_id"]
+    config.ensure_dir(config.claimed_dir())
+    os.rename(_pending_path(proposal_id), _claimed_path(proposal_id))
+
+    assert proposals.list_proposals() == []
+    listed = proposals.list_proposals(include_applied=True)
+    assert [item["proposal_id"] for item in listed] == [proposal_id]
+
+
+def test_the_claim_directory_is_owner_only(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+    proposals.apply_proposal(proposal_id, client=_client(mock))
+    assert _mode(config.claimed_dir()) == 0o700
+
+
+def test_two_concurrent_applies_send_exactly_one_write(isolated_config):
+    """The real race, run for real: one thread wins the claim, the other is refused."""
+    import threading
+
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+    start = threading.Barrier(2)
+    outcomes: list[object] = []
+    lock = threading.Lock()
+
+    def attempt() -> None:
+        start.wait()
+        try:
+            result = proposals.apply_proposal(proposal_id, client=_client(mock))
+        except proposals.ProposalError as exc:
+            result = exc
+        with lock:
+            outcomes.append(result)
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(mock.non_get_requests) == 1
+    refused = [item for item in outcomes if isinstance(item, proposals.ProposalError)]
+    applied = [item for item in outcomes if isinstance(item, dict)]
+    assert len(refused) == 1
+    assert len(applied) == 1
+    assert applied[0]["status"] == proposals.STATUS_APPLIED
+
+
+def test_applying_an_unknown_id_is_refused_before_any_client_is_built(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    with pytest.raises(proposals.ProposalError) as excinfo:
+        proposals.apply_proposal("deadbeef" * 4, client=_client(mock))
+    assert "no pending proposal" in str(excinfo.value)
+    assert mock.requests == []
+
+
+def test_a_record_that_is_not_pending_is_put_back_and_refused(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+    record = json.loads(_pending_path(proposal_id).read_text())
+    record["status"] = proposals.STATUS_APPLIED
+    _pending_path(proposal_id).write_text(json.dumps(record))
+
+    with pytest.raises(proposals.ProposalError) as excinfo:
+        proposals.apply_proposal(proposal_id, client=_client(mock))
+
+    assert "not pending" in str(excinfo.value)
+    assert mock.non_get_requests == []
+    # The claim was released, so the file is back where it started.
+    assert _pending_path(proposal_id).exists()
+    assert not _claimed_path(proposal_id).exists()
+
+
+def test_a_corrupt_claim_still_refuses_instead_of_resending(isolated_config):
+    mock = GrantedWriteLinkedIn()
+    proposal_id = _headline_proposal()["proposal_id"]
+    config.ensure_dir(config.claimed_dir())
+    _claimed_path(proposal_id).write_text("{not json")
+
+    with pytest.raises(proposals.ProposalError) as excinfo:
+        proposals.apply_proposal(proposal_id, client=_client(mock))
+
+    assert "claimed" in str(excinfo.value)
+    assert mock.non_get_requests == []

@@ -21,6 +21,7 @@ DEFAULT_CONFIG_DIR = Path.home() / ".config" / "linkedin-mcp"
 ENV_FILENAME = ".env"
 PROPOSALS_DIRNAME = "proposals"
 APPLIED_DIRNAME = "applied"
+CLAIMED_DIRNAME = "in-progress"
 PENDING_AUTH_FILENAME = "pending_auth.json"
 
 # How long a handed-out OAuth CSRF state stays usable. Matches the documented
@@ -65,6 +66,15 @@ def proposals_dir() -> Path:
 
 def applied_dir() -> Path:
     return proposals_dir() / APPLIED_DIRNAME
+
+
+def claimed_dir() -> Path:
+    """Where a proposal lives while its ONE write is in flight.
+
+    A file here is a claim: it means some caller took ownership of that proposal
+    before sending. See ``proposals.apply_proposal`` for the recovery rules.
+    """
+    return proposals_dir() / CLAIMED_DIRNAME
 
 
 def ensure_dir(path: Path) -> Path:
