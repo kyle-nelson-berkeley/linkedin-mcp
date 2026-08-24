@@ -112,7 +112,15 @@ def _listener_address(redirect_uri: str) -> tuple[str, int, str]:
             f"redirect_uri must be an http://localhost URL for the local catcher, "
             f"got scheme {parsed.scheme!r}"
         )
-    host = parsed.hostname or "127.0.0.1"
+    host = parsed.hostname
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        # The catcher is a plaintext local redirect target. Binding anywhere
+        # beyond loopback would expose the OAuth callback (and the code it
+        # carries) to the network.
+        raise OAuthError(
+            "redirect_uri host must be loopback (localhost, 127.0.0.1, or ::1) "
+            f"for the local catcher, got {host!r}"
+        )
     port = parsed.port or 80
     return host, port, parsed.path or "/"
 

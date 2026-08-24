@@ -378,3 +378,31 @@ def test_token_exchange_rejects_response_without_access_token(isolated_config):
     with pytest.raises(oauth.OAuthError):
         oauth.exchange_code("code", transport=httpx.MockTransport(handler))
     assert config.access_token() is None
+
+
+# --- round 5: the local catcher must only bind loopback -----------------------
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://0.0.0.0:8765/callback",
+        "http://192.168.1.10:8765/callback",
+        "http://example.com:8765/callback",
+        "http://:8765/callback",  # missing hostname
+    ],
+)
+def test_listener_rejects_non_loopback_redirect_hosts(redirect_uri):
+    with pytest.raises(oauth.OAuthError, match="loopback|localhost"):
+        oauth._listener_address(redirect_uri)
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    ["http://localhost:8765/callback", "http://127.0.0.1:8765/callback"],
+)
+def test_listener_accepts_loopback_redirect_hosts(redirect_uri):
+    host, port, path = oauth._listener_address(redirect_uri)
+    assert host in ("localhost", "127.0.0.1")
+    assert port == 8765
+    assert path == "/callback"

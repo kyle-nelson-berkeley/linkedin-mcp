@@ -157,3 +157,19 @@ def test_get_profile_reports_a_failed_read_as_ok_false_with_the_status(
     assert str(status_code) in result["message"]
     assert "Expired access token" in result["message"]
     assert "AQVsecret-value" not in repr(result)
+
+
+# --- round 5: explicit person_id must still diff against the current value ----
+
+
+def test_propose_edit_with_explicit_person_id_diffs_against_current_value(mock_linkedin):
+    """Supplying person_id (the normal follow-up to get_profile) must not
+    degrade the approval diff to 'against empty' while a token is stored —
+    the reviewer needs to see what the edit replaces."""
+    result = server.propose_edit(
+        "headline", {"text": "Ocean robotics engineer"}, person_id=PERSON_ID
+    )
+    assert result["ok"] is True
+    assert "Current headline from the mock profile" in result["diff"]
+    # and still zero writes on the wire
+    assert mock_linkedin.non_get_requests == []

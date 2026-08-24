@@ -136,7 +136,10 @@ def propose_edit(
 ) -> dict[str, Any]:
     try:
         client = None
-        if person_id is None and config.access_token():
+        if config.access_token():
+            # A read client whenever a token exists — even with an explicit
+            # person_id — so the approval diff shows the CURRENT value being
+            # replaced, not an empty placeholder.
             client = _client()
         try:
             record = proposals.propose_edit(
