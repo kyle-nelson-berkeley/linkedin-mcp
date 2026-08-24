@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Sample values copied VERBATIM from Microsoft Learn's public LinkedIn API docs into docs/api-notes.md (dated spec excerpts) — not real credentials"
+regexes = ['''AQUvlL_DYEzvT2wz1QJiEPeLioeA''']
