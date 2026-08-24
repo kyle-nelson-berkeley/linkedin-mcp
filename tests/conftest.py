@@ -8,8 +8,36 @@ server with an empty config dir and never triggers an outbound request.
 from __future__ import annotations
 
 import os
+import socket
 
 import pytest
+
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "0.0.0.0", ""}
+
+
+class OutboundNetworkBlocked(AssertionError):
+    """Raised if any test tries to open a socket off this machine."""
+
+
+@pytest.fixture(autouse=True)
+def no_outbound_network(monkeypatch):
+    """Hard guarantee: no test reaches LinkedIn (or anything else remote).
+
+    Loopback stays open because the OAuth redirect catcher is a real localhost
+    HTTP server. Everything else must go through httpx.MockTransport.
+    """
+    real_connect = socket.socket.connect
+
+    def guarded_connect(self, address, *args, **kwargs):
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(host, str) and host not in _LOCAL_HOSTS:
+            raise OutboundNetworkBlocked(
+                f"test attempted an outbound connection to {host!r}; "
+                "use httpx.MockTransport instead"
+            )
+        return real_connect(self, address, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
 
 CONFIG_DIR_ENV = "LINKEDIN_MCP_CONFIG_DIR"
 
