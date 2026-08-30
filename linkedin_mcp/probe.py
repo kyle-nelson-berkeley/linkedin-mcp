@@ -25,7 +25,10 @@ Outcomes (docs/api-notes.md, "Partner gating"):
 The probe first READS the profile to learn the person id. If that read fails,
 the probe stops there and reports the read's own status (``phase`` =
 ``preflight_profile_read``) without sending any write — an expired token surfaces
-as AUTH_ERROR rather than as a confusing "the profile had no id" error.
+as AUTH_ERROR rather than as a confusing "the profile had no id" error, and a
+permission-marked refusal surfaces as EXPECTED_PRE_APPROVAL (the self-serve OIDC
+scopes cannot read /v2/me either) with an explicit caveat that the write shape
+is still unverified.
 """
 
 from __future__ import annotations
@@ -88,6 +91,15 @@ _EXPLANATIONS = {
     ),
 }
 
+_PREFLIGHT_PRE_APPROVAL_EXPLANATION = (
+    "LinkedIn refused the preflight profile READ over permissions, not credentials — "
+    "the token is fine. The self-serve scopes (openid profile email) cannot read "
+    "/v2/me; that read is partner-gated just like the write. This is the expected "
+    "pre-approval outcome. NOTE: because the read was refused, no write was sent, so "
+    "the write endpoint shape is NOT yet verified — re-run this probe after partner "
+    "approval lands."
+)
+
 
 class ProbeRefused(RuntimeError):
     """Raised when the probe is invoked without the explicit opt-in env flag."""
@@ -138,21 +150,23 @@ def discriminate(status_code: int, body: Any) -> dict[str, Any]:
 
 
 def _preflight_verdict(exc: httpx.HTTPStatusError) -> dict[str, Any]:
-    """Classify a failed GET /v2/me. Always a failure — no write was attempted.
+    """Classify a failed GET /v2/me. No write was attempted.
 
-    ``discriminate`` can only return a non-failure outcome here for a 401/403
-    carrying a scope marker; on the READ path that means the read itself is not
-    permitted, which is an auth/setup problem, not the expected partner gate on
-    writes. So it is reported as AUTH_ERROR.
+    A 401/403 carrying a scope/permission marker is the expected pre-approval
+    state: the self-serve OIDC scopes (openid profile email) cannot read
+    ``/v2/me`` — that read is partner-gated just like the write. The token is
+    fine; nothing needs re-authing. But because the read failed, the probe
+    never reached the write endpoint, so the write shape stays unverified —
+    the explanation must not claim it was proven.
+
+    A bare 401/403 with no marker is still a real credential failure.
     """
     body = api.decode_body(exc.response)
     verdict = discriminate(exc.response.status_code, body)
     if not verdict["is_failure"]:
         verdict = {
             **verdict,
-            "outcome": AUTH_ERROR,
-            "explanation": _EXPLANATIONS[AUTH_ERROR],
-            "is_failure": True,
+            "explanation": _PREFLIGHT_PRE_APPROVAL_EXPLANATION,
         }
     return {
         **verdict,

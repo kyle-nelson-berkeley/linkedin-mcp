@@ -147,22 +147,46 @@ def _probe_transport(status_code: int, body, seen: list):
     return httpx.MockTransport(handler)
 
 
-@pytest.mark.parametrize(
-    "body", [{"message": "Expired access token"}, {"message": "Not enough permissions"}]
-)
-def test_preflight_401_is_an_auth_error_not_a_missing_id_error(
-    isolated_config, monkeypatch, body
-):
+def test_preflight_401_without_scope_marker_is_an_auth_error(isolated_config, monkeypatch):
     monkeypatch.setenv(probe.LIVE_PROBE_ENV, "1")
     config.write_values({config.KEY_ACCESS_TOKEN: "tok"})
     seen: list = []
 
-    result = probe.run_live_probe(transport=_probe_transport(401, body, seen))
+    result = probe.run_live_probe(
+        transport=_probe_transport(401, {"message": "Expired access token"}, seen)
+    )
 
     assert result["outcome"] == probe.AUTH_ERROR
     assert result["is_failure"] is True
     assert result["status_code"] == 401
     assert result["request"] == {"method": "GET", "url": "https://api.linkedin.com/v2/me"}
+    assert seen == [("GET", "https://api.linkedin.com/v2/me")]
+
+
+def test_preflight_403_with_permission_marker_is_expected_pre_approval(
+    isolated_config, monkeypatch
+):
+    """The self-serve OIDC scopes cannot read /v2/me, so a permission-marked
+    403 on the preflight read is the expected pre-approval state — the token is
+    fine — but the write endpoint shape is still unverified and the
+    explanation must say so."""
+    monkeypatch.setenv(probe.LIVE_PROBE_ENV, "1")
+    config.write_values({config.KEY_ACCESS_TOKEN: "tok"})
+    seen: list = []
+    body = {
+        "status": 403,
+        "serviceErrorCode": 100,
+        "code": "ACCESS_DENIED",
+        "message": "Not enough permissions to access: me.GET.NO_VERSION",
+    }
+
+    result = probe.run_live_probe(transport=_probe_transport(403, body, seen))
+
+    assert result["outcome"] == probe.EXPECTED_PRE_APPROVAL
+    assert result["is_failure"] is False
+    assert result["phase"] == "preflight_profile_read"
+    assert "not" in result["explanation"].lower()
+    assert "write endpoint" in result["explanation"].lower()
     assert seen == [("GET", "https://api.linkedin.com/v2/me")]
 
 
