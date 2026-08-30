@@ -5,12 +5,32 @@ hard **propose-then-approve** split: the model can *draft* a change and show
 you the diff, but only one tool can ever write, and it acts only on a
 proposal you have seen.
 
-> **Partner gating:** LinkedIn's Profile Edit API is restricted to
-> LinkedIn-approved partner developers (`w_compliance` is "a private
-> permission and access is granted to select developers" — see
-> [docs/api-notes.md](docs/api-notes.md)). Until partner approval lands,
-> `apply_proposal` returns an invalid-scope error. **That is expected, not a
-> defect.** Everything else (OAuth, proposals, diffs) works today.
+## Read this before you install
+
+**1. You bring your own LinkedIn app.** There is no shared or hosted service
+here. You create your own app at
+[linkedin.com/developers/apps](https://www.linkedin.com/developers/apps), and
+your own client ID and secret go in a file on your own machine
+(`~/.config/linkedin-mcp/.env`, permissions `600`). The server itself makes no
+outbound call to anything but LinkedIn's own API — there is no telemetry and
+no third party. Note that it is still an MCP server: profile data and diffs it
+returns go to whichever agent you connect, so if that agent is cloud-backed,
+your profile content reaches that provider like any other chat content. See
+[PRIVACY.md](PRIVACY.md).
+
+**2. Writing to your profile needs LinkedIn partner approval — which you must
+apply for yourself.** LinkedIn's Profile Edit API is restricted to
+LinkedIn-approved partner developers (`w_compliance` is "a private permission
+and access is granted to select developers" — see
+[docs/api-notes.md](docs/api-notes.md)). Approval is granted per developer app,
+so *your* app needs *your* approval; nobody else's carries over. Until
+it lands, `apply_proposal` returns an invalid-scope error. **That is expected,
+not a defect** — and it may never land, since the permission goes to "select
+developers".
+
+Everything else works today without partner approval: OAuth sign-in, reading
+your profile, drafting edits, and reviewing diffs. Only the final write is
+gated.
 
 ## How it works
 
@@ -31,7 +51,9 @@ by an agent, never committed (see [.env.example](.env.example)).
 
 ## Install
 
-Requires Python ≥ 3.11.
+Requires Python ≥ 3.11. Clone the repo, then register it as an MCP server in
+your agent — add this to your client's MCP config (for Claude Code that is
+`~/.claude.json`, or run `claude mcp add linkedin -- bash /path/to/linkedin-mcp/run.sh`):
 
 ```json
 {
@@ -44,16 +66,19 @@ Requires Python ≥ 3.11.
 }
 ```
 
-`run.sh` creates `.venv/` and installs pinned dependencies on first launch
-(stamp-gated; all bootstrap output goes to stderr, keeping the MCP stdio
-channel clean).
+Replace `/path/to/linkedin-mcp` with the absolute path to your clone. `run.sh`
+creates `.venv/` and installs pinned dependencies on first launch (stamp-gated;
+all bootstrap output goes to stderr, keeping the MCP stdio channel clean).
+
+Then follow [docs/SETUP.md](docs/SETUP.md) to create your LinkedIn app and sign
+in — the server has no credentials until you do.
 
 ## Setup
 
-Follow [docs/SETUP-KYLE.md](docs/SETUP-KYLE.md) — it walks through creating
-the LinkedIn Developer app, registering the redirect URL, filling
-`~/.config/linkedin-mcp/.env`, running `auth_start`, and applying for the
-partner program.
+Follow [docs/SETUP.md](docs/SETUP.md) — it walks through creating your own
+LinkedIn Developer app, registering the redirect URL, filling
+`~/.config/linkedin-mcp/.env` with your own client ID and secret, running
+`auth_start`, and applying for the partner program.
 
 ## Development
 

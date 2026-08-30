@@ -19,7 +19,7 @@ from . import api, config, oauth, proposals
 SERVER_NAME = "linkedin"
 
 INSTRUCTIONS = """\
-Edit Kyle's own LinkedIn profile through a propose-then-approve workflow.
+Edit the owner's own LinkedIn profile through a propose-then-approve workflow.
 
 Never call apply_proposal on your own initiative. The sequence is always:
   1. propose_edit  -> returns a diff and a proposal_id, writes NOTHING

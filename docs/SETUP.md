@@ -1,8 +1,30 @@
-# SETUP-KYLE — LinkedIn app creation, OAuth, and the first live probe
+# Setup — LinkedIn app creation, OAuth, and the first live probe
 
 Every step here is manual and yours alone: the app creation, the credential
 entry, and the partner application all happen in your browser. No agent does
 any of this for you, and no personal values ever go in this repo.
+
+**Two things to know before you start:**
+
+1. **You create your own LinkedIn Developer app** (§1) and use **your own**
+   client ID and secret (§3). This project ships no shared credentials and
+   runs no server — every copy is self-hosted on the machine of the person
+   running it.
+2. **Writing to your profile needs LinkedIn partner approval, which you must
+   apply for yourself** (§4). Approval is granted per developer app, so it is
+   *your* app that needs it — nobody else's approval carries over. Until it
+   lands (and it may never: the permission goes to "select developers"),
+   `apply_proposal` returns an invalid-scope error, which is expected. Steps
+   1–3 and 5 all work without it: sign-in, reading your profile, drafting
+   edits, and reviewing diffs.
+
+Paths below are written relative to your clone, so run the commands from the
+directory you cloned this repository into:
+
+```bash
+git clone https://github.com/kyle-nelson-berkeley/linkedin-mcp.git
+cd linkedin-mcp
+```
 
 ## 1. Create the LinkedIn Developer app
 
@@ -10,13 +32,17 @@ any of this for you, and no personal values ever go in this repo.
    to your personal LinkedIn account).
 2. Click the blue **Create app** button (top right).
 3. Fill the form:
-   - **App name:** `linkedin-mcp` (any name works; this shows on the OAuth
-     consent screen).
+   - **App name:** any name works; this shows on the OAuth consent screen.
+     (The software is `linkedin-mcp`; the reference LinkedIn app listing that
+     [PRIVACY.md](../PRIVACY.md) covers is registered as `profile-edit-mcp`.
+     Your app is separate from both and is yours alone.)
    - **LinkedIn Page:** LinkedIn requires associating an app with a company
      page. If you have none, click "Create a new LinkedIn Page" link under
      the field, make a minimal page (Company → small business, any name),
      then come back and select it.
-   - **App logo:** upload any square image (required).
+   - **App logo:** a square image is required. Use your own, or one of the
+     ready-made square PNGs in this repo's `assets/` directory (for example
+     `assets/profile-edit-mcp-logo-512.png`).
    - Check the legal-agreement box.
 4. Click **Create app**.
 
@@ -44,13 +70,14 @@ any of this for you, and no personal values ever go in this repo.
 2. In Terminal:
 
    ```bash
+   # run this from your clone of this repository
    mkdir -p ~/.config/linkedin-mcp
-   cp "/Users/kyle/code/custom MCPs/linkedin-mcp/.env.example" ~/.config/linkedin-mcp/.env
+   cp .env.example ~/.config/linkedin-mcp/.env
    chmod 600 ~/.config/linkedin-mcp/.env
-   open -e ~/.config/linkedin-mcp/.env
+   open -e ~/.config/linkedin-mcp/.env   # Linux: use `xdg-open` or any editor
    ```
 
-3. In the TextEdit window that opens, replace `your-client-id-here` and
+3. In the editor that opens, replace `your-client-id-here` and
    `your-client-secret-here` with the real values from the Auth tab. Save
    and close. Never paste these values into a chat with any agent.
 
@@ -82,8 +109,8 @@ any of this for you, and no personal values ever go in this repo.
 
 ## 5. First OAuth (works before partner approval)
 
-1. In the portfolio repo (or any project with the server registered), start
-   a Claude Code session and run the `auth_start` tool.
+1. In any project where you registered the server (see the README's Install
+   section), start an agent session and run the `auth_start` tool.
 2. It prints an authorization URL and starts a one-shot listener on
    localhost port 8765. Open the URL in your browser, sign in, click
    **Allow**.
@@ -108,12 +135,14 @@ any of this for you, and no personal values ever go in this repo.
 
 ## 6. THE FIRST POST-OAUTH STEP: run the live probe
 
-From the repo:
+From your clone of this repository:
 
 ```bash
-cd "/Users/kyle/code/custom MCPs/linkedin-mcp"
 LINKEDIN_MCP_LIVE_PROBE=1 .venv/bin/python -m linkedin_mcp --live-probe
 ```
+
+(`.venv/` is created the first time `run.sh` runs — see the README's Install
+section. If it does not exist yet, run `bash run.sh --help` once.)
 
 This sends exactly ONE real request to the documented profile-write
 endpoint and interprets the result. Read the outcome in plain words:

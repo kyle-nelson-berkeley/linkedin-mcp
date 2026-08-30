@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#FEF9F3"/>
+  <!-- body -->
+  <path d="M 512 470 c 210 0 330 150 330 330 q 0 60 -60 60 h -540 q -60 0 -60 -60 c 0 -180 120 -330 330 -330 z" fill="#CFC6A5"/>
+  <!-- face sliver -->
+  <circle cx="512" cy="410" r="118" fill="#EFDCC0"/>
+  <!-- strap: thin lines from shoulders to binoculars -->
+  <g stroke="#8A6F55" stroke-width="14" fill="none">
+    <path d="M 420 505 q 20 90 62 122"/>
+    <path d="M 604 505 q -20 90 -62 122"/>
+  </g>
+  <!-- mustache -->
+  <g fill="#9A938E">
+    <ellipse cx="450" cy="458" rx="88" ry="48"/>
+    <ellipse cx="574" cy="458" rx="88" ry="48"/>
+  </g>
+  <!-- hat -->
+  <path d="M 512 200 c 100 0 160 62 160 150 h -320 c 0 -88 60 -150 160 -150 z" fill="#D9C9A3"/>
+  <rect x="352" y="318" width="320" height="34" fill="#B4A87E"/>
+  <ellipse cx="512" cy="368" rx="270" ry="52" fill="#D9C9A3"/>
+  <!-- binoculars: tall lenses, bridge near the top -->
+  <g fill="#6E7B57">
+    <rect x="426" y="612" width="74" height="150" rx="26"/>
+    <rect x="524" y="612" width="74" height="150" rx="26"/>
+    <rect x="494" y="632" width="36" height="34"/>
+  </g>
+</svg>
