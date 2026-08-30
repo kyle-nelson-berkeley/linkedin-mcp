@@ -83,6 +83,17 @@ cd linkedin-mcp
 
 ## 4. Request API access (partner program)
 
+> **Status 2026-08-30: the program is CLOSED.** LinkedIn's Compliance FAQ
+> (learn.microsoft.com/en-us/linkedin/compliance/compliance-api/compliance-faq,
+> last updated 2026-05-15) says the Compliance API is a closed permission and
+> is "currently not accepting applications for new Partners due to resource
+> constraints" — LinkedIn will announce and restore the request form if that
+> changes. It is also described as a private, *paid* partnership for
+> FINRA/SEC-registered archiving use cases, which a single-user profile-edit
+> tool would not satisfy even when applications reopen. Nothing below is
+> currently actionable; the steps are kept for the day the program reopens.
+> Everything else in this setup (OAuth, propose/diff tooling) works without it.
+
 1. Open the app's **Products** tab.
 2. Profile editing (`w_compliance`) is a **private permission** — it is not
    a self-serve product tile. Request it through LinkedIn's access form:
