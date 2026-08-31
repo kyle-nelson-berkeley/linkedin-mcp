@@ -1,6 +1,6 @@
 # Privacy Policy — profile-edit-mcp
 
-**Effective date: 2026-08-29**
+**Effective date: 2026-08-31**
 
 This policy covers **profile-edit-mcp**, a LinkedIn developer application
 operated by **Desert Mango (Kyle Nelson)**, and the open-source software
@@ -38,9 +38,13 @@ machine of the person who installed it (the "operator").
 
 ## Where data goes
 
-- Data is transmitted to **one place only: LinkedIn's own API endpoints**
-  (`api.linkedin.com`), and only to read or update the operator's own
-  profile.
+- The software transmits data to **one place only: LinkedIn's own API
+  endpoints** (`api.linkedin.com`), and only to read or update the
+  operator's own profile.
+- One clarification: the AI assistant the operator connects this server to
+  also sees the profile data it reads and drafts — that is the point of the
+  tool. That data is handled under the assistant provider's own privacy
+  policy, which the operator chooses.
 - Every profile change is first drafted locally and shown to the operator
   as a diff. Nothing is sent to LinkedIn until the operator gives
   **explicit approval** for that specific change.
